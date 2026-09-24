@@ -108,8 +108,14 @@ class ParcelStore {
         if (Array.isArray(list) && list.length > 0) {
           for (const p of list) {
             if (p && p.number) {
+              const trackingData =
+                p.data && p.data.events && p.data.events.length > 0 && p.data.status !== 'UNKNOWN'
+                  ? p.data
+                  : makeInitialTracking(p.number);
+
               this.parcels.set(p.number, {
                 ...p,
+                data: trackingData,
                 createdAt: p.createdAt || new Date().toISOString(),
                 updatedAt: p.updatedAt || new Date().toISOString(),
               });

@@ -151,15 +151,34 @@ export function parseCainiaoItem(item: CainiaoItem): TrackingData {
     },
   );
 
+  const finalEvents =
+    events.length > 0
+      ? events
+      : [
+          {
+            time: Date.now(),
+            description:
+              "Bestellung wird vorbereitet (Your order's processing and will update soon)",
+            code: 'ORDER_PROCESSING',
+          },
+        ];
+
+  const status =
+    item.status && item.status !== 'UNKNOWN'
+      ? item.status
+      : events.length > 0
+        ? 'DELIVERING'
+        : 'ORDER_PROCESSING';
+
   return {
     number: item.mailNo,
     internationalNumber: item.copyRealMailNo || undefined,
     origin: item.originCountry || 'China',
     destination: item.destCountry || 'Deutschland',
-    status: item.status || 'UNKNOWN',
+    status,
     carrier: item.destCpInfo?.cpName || 'Cainiao',
     checkedAt: new Date().toISOString(),
-    events,
+    events: finalEvents,
   };
 }
 
