@@ -194,6 +194,29 @@ class ParcelStore {
     return ok;
   }
 
+  public updateTracking(
+    number: string,
+    data: Partial<import('./tracking').TrackingData>,
+    internationalNumber?: string,
+  ): boolean {
+    const cleanNumber = number.trim().toUpperCase();
+    const existing = this.parcels.get(cleanNumber);
+    if (!existing) return false;
+
+    const currentData = existing.data || makeInitialTracking(cleanNumber);
+    existing.data = {
+      ...currentData,
+      ...data,
+      internationalNumber: internationalNumber || currentData.internationalNumber,
+      checkedAt: new Date().toISOString(),
+    };
+    existing.updatedAt = new Date().toISOString();
+    existing.error = undefined;
+    this.parcels.set(cleanNumber, existing);
+    this.persist();
+    return true;
+  }
+
   public async refresh(
     number?: string,
   ): Promise<{ updated: number; errors: Record<string, string> }> {

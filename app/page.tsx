@@ -497,6 +497,31 @@ export default function Home() {
             {busy ? 'Wird aktualisiert' : 'Aktualisieren'}
           </Button>
 
+          <Button
+            variant="outline"
+            onClick={() => {
+              if (
+                typeof window !== 'undefined' &&
+                (window as unknown as { unterwegsDesktop?: { openAliExpressLogin?: () => void } })
+                  .unterwegsDesktop?.openAliExpressLogin
+              ) {
+                (
+                  window as unknown as { unterwegsDesktop: { openAliExpressLogin: () => void } }
+                ).unterwegsDesktop.openAliExpressLogin();
+              } else {
+                setMessage(
+                  'Tipp: Führe "unterwegs login" im Terminal aus oder nutze das Tray-Icon für die Anmeldung!',
+                );
+              }
+            }}
+            className="action"
+            style={{ borderColor: '#ff6000', color: '#ff6000' }}
+            title="Öffnet das AliExpress-Anmeldefenster zur automatischen Live-Synchronisation deiner Sendungsdaten"
+          >
+            <ArrowUpRight size={16} />
+            AliExpress verbinden
+          </Button>
+
           <Button className="action primary" onClick={() => setAdding(!adding)}>
             <Plus size={18} />
             Paket hinzufügen

@@ -30,6 +30,8 @@ export async function POST(request: Request) {
       name?: string;
       note?: string;
       syncParcels?: unknown[];
+      updateTracking?: unknown;
+      internationalNumber?: string;
     };
 
     // Client bulk sync support
@@ -41,6 +43,16 @@ export async function POST(request: Request) {
         success: true,
         count: parcelStore.getAll().length,
       });
+    }
+
+    // Direct tracking update (e.g. from live AliExpress desktop sync)
+    if (body.updateTracking && body.number) {
+      const ok = parcelStore.updateTracking(
+        body.number,
+        body.updateTracking as Partial<import('@/lib/tracking').TrackingData>,
+        (body as { internationalNumber?: string }).internationalNumber,
+      );
+      return Response.json({ success: ok, updated: body.number });
     }
 
     if (!body.number) {

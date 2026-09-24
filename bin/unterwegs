@@ -43,6 +43,11 @@ case "$1" in
     exec "$ELECTRON_BIN" "$DESKTOP_MAIN" --verify >/dev/null 2>&1 &
     exit 0
     ;;
+  login|sync)
+    echo "Öffne AliExpress-Anmeldung & Live-Synchronisation..."
+    exec "$ELECTRON_BIN" "$DESKTOP_MAIN" --login >/dev/null 2>&1 &
+    exit 0
+    ;;
   mcp)
     exec /home/lukheinbach/.local/bin/unterwegs-mcp
     ;;
@@ -54,6 +59,7 @@ case "$1" in
     echo "  unterwegs --background    Startet die Desktop-App minimiert im System-Tray"
     echo "  unterwegs status          Zeigt aktuelle Sendungsübersicht im Terminal"
     echo "  unterwegs refresh         Aktualisiert alle Sendungen live von Cainiao"
+    echo "  unterwegs login           Öffnet AliExpress-Login zur Live-Synchronisation"
     echo "  unterwegs track <NUMMER>  Fragt eine Sendungsnummer direkt ab"
     echo "  unterwegs add <NR> [NAME] Fügt ein neues Paket hinzu"
     echo "  unterwegs verify          Öffnet das Cainiao-Verifizierungsfenster (Captcha lösen)"
