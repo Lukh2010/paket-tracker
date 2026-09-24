@@ -1,4 +1,12 @@
+import fs from 'node:fs';
+import path from 'node:path';
 import { Parcel, fetchCainiaoTracking } from './tracking';
+
+const DATA_DIR = path.join(
+  process.env.HOME || '/home/lukheinbach',
+  '.local/share/unterwegs',
+);
+const DATA_FILE = path.join(DATA_DIR, 'parcels.json');
 
 const DEFAULT_PARCELS: Parcel[] = [
   {
@@ -81,8 +89,44 @@ class ParcelStore {
     this.init();
   }
 
+  private persist() {
+    try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(
+        DATA_FILE,
+        JSON.stringify(Array.from(this.parcels.values()), null, 2),
+        'utf-8',
+      );
+    } catch (e) {
+      console.error('[Store] Failed to write parcels.json:', e);
+    }
+  }
+
   private init() {
     if (this.initialized) return;
+
+    if (fs.existsSync(DATA_FILE)) {
+      try {
+        const raw = fs.readFileSync(DATA_FILE, 'utf-8');
+        const list = JSON.parse(raw);
+        if (Array.isArray(list) && list.length > 0) {
+          for (const p of list) {
+            if (p && p.number) {
+              this.parcels.set(p.number, {
+                ...p,
+                createdAt: p.createdAt || new Date().toISOString(),
+                updatedAt: p.updatedAt || new Date().toISOString(),
+              });
+            }
+          }
+          this.initialized = true;
+          return;
+        }
+      } catch (e) {
+        console.error('[Store] Failed to load parcels.json:', e);
+      }
+    }
+
     for (const p of DEFAULT_PARCELS) {
       this.parcels.set(p.number, {
         ...p,
@@ -137,12 +181,15 @@ class ParcelStore {
     }
 
     this.parcels.set(cleanNumber, parcel);
+    this.persist();
     return parcel;
   }
 
   public remove(number: string): boolean {
     const cleanNumber = number.trim().toUpperCase();
-    return this.parcels.delete(cleanNumber);
+    const ok = this.parcels.delete(cleanNumber);
+    if (ok) this.persist();
+    return ok;
   }
 
   public async refresh(
@@ -190,6 +237,7 @@ class ParcelStore {
           });
         }
       }
+      this.persist();
     } finally {
       this.isRefreshing = false;
     }
@@ -199,11 +247,14 @@ class ParcelStore {
 
   public setParcelsFromClient(clientParcels: Parcel[]) {
     if (!Array.isArray(clientParcels)) return;
+    let added = false;
     for (const cp of clientParcels) {
       if (cp.number && !this.parcels.has(cp.number)) {
         this.parcels.set(cp.number, cp);
+        added = true;
       }
     }
+    if (added) this.persist();
   }
 }
 
