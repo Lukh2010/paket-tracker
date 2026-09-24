@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { Parcel, fetchCainiaoTracking } from './tracking';
+import { Parcel, fetchCainiaoTracking, fetchCainiaoBatch } from './tracking';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'parcels.json');
@@ -179,33 +179,44 @@ class ParcelStore {
           ) as Parcel[])
         : Array.from(this.parcels.values());
 
-      for (let i = 0; i < targets.length; i++) {
-        const p = targets[i];
-        if (i > 0) {
-          // Delay 250ms between requests to prevent Cainiao upstream rate limits
-          await new Promise((r) => setTimeout(r, 250));
-        }
+      if (targets.length === 0) {
+        return { updated: 0, errors };
+      }
 
-        try {
-          const data = await fetchCainiaoTracking(p.number, true);
-          this.parcels.set(p.number, {
-            ...p,
-            data,
-            error: undefined,
-            updatedAt: new Date().toISOString(),
-          });
-          updated++;
-        } catch (err: unknown) {
-          const errMsg =
-            err instanceof Error ? err.message : 'Verbindungsfehler';
+      const numbers = targets.map((t) => t.number);
+      try {
+        const batchResults = await fetchCainiaoBatch(numbers, true);
+        for (const p of targets) {
+          const freshData = batchResults.get(p.number);
+          if (freshData) {
+            this.parcels.set(p.number, {
+              ...p,
+              data: freshData,
+              error: undefined,
+              updatedAt: new Date().toISOString(),
+            });
+            updated++;
+          } else {
+            this.parcels.set(p.number, {
+              ...p,
+              error: p.data ? undefined : 'Noch keine Trackingdaten verfügbar',
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (err: unknown) {
+        const errMsg =
+          err instanceof Error ? err.message : 'Verbindungsfehler';
+        for (const p of targets) {
           errors[p.number] = errMsg;
           this.parcels.set(p.number, {
             ...p,
-            error: p.data ? undefined : errMsg,
+            error: errMsg,
             updatedAt: new Date().toISOString(),
           });
         }
       }
+
       this.persist();
     } finally {
       this.isRefreshing = false;
