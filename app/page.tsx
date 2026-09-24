@@ -629,12 +629,64 @@ export default function Home() {
               </div>
 
               {p.error && (
-                <output className="notice inline">
-                  {p.error}
-                  {p.data
-                    ? ' Angezeigt wird der letzte erfolgreiche Abruf.'
-                    : ''}
-                </output>
+                <div
+                  style={{
+                    margin: '8px 16px 12px 16px',
+                    padding: '10px 14px',
+                    borderRadius: '8px',
+                    background: '#fff8e6',
+                    border: '1px solid #f6e05e',
+                    color: '#744210',
+                    fontSize: '13px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '6px',
+                  }}
+                >
+                  <div style={{ fontWeight: 600 }}>⚠️ {p.error}</div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '10px',
+                      flexWrap: 'wrap',
+                      marginTop: '2px',
+                    }}
+                  >
+                    <a
+                      href={`https://global.cainiao.com/newDetail.htm?mailNoList=${p.number}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: '#c53030',
+                        textDecoration: 'underline',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      <ArrowUpRight size={14} />
+                      Auf Cainiao öffnen
+                    </a>
+                    <span style={{ color: '#aaa' }}>·</span>
+                    <a
+                      href={`https://t.17track.net/en#nums=${p.number}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        color: '#2b6cb0',
+                        textDecoration: 'underline',
+                        fontWeight: 600,
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '4px',
+                      }}
+                    >
+                      <ArrowUpRight size={14} />
+                      Auf 17TRACK öffnen
+                    </a>
+                  </div>
+                </div>
               )}
 
               {open && (
@@ -658,6 +710,56 @@ export default function Home() {
                           : 'Noch nicht verfügbar'}
                       </span>
                     </div>
+                  </div>
+
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: '8px',
+                      flexWrap: 'wrap',
+                      margin: '12px 0 16px 0',
+                    }}
+                  >
+                    <a
+                      href={`https://global.cainiao.com/newDetail.htm?mailNoList=${p.number}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        background: '#e02424',
+                        color: '#ffffff',
+                        textDecoration: 'none',
+                        fontWeight: 500,
+                      }}
+                    >
+                      <ArrowUpRight size={14} />
+                      Bei Cainiao Global öffnen
+                    </a>
+                    <a
+                      href={`https://t.17track.net/en#nums=${p.number}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        background: '#0284c7',
+                        color: '#ffffff',
+                        textDecoration: 'none',
+                        fontWeight: 500,
+                      }}
+                    >
+                      <ArrowUpRight size={14} />
+                      Bei 17TRACK prüfen
+                    </a>
                   </div>
 
                   <h3>Versandverlauf</h3>

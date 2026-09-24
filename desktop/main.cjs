@@ -40,7 +40,11 @@ if (!gotTheLock) {
   process.exit(0);
 }
 
-app.on('second-instance', () => {
+app.on('second-instance', (event, commandLine) => {
+  if (Array.isArray(commandLine) && commandLine.includes('--verify')) {
+    void fetchTrackerSummary().then((s) => openCainiaoVerificationWindow(s));
+    return;
+  }
   if (mainWindow) {
     if (mainWindow.isMinimized()) mainWindow.restore();
     mainWindow.show();
@@ -179,6 +183,50 @@ async function triggerServerRefresh() {
   });
 }
 
+function openCainiaoVerificationWindow(summary) {
+  const items = summary && Array.isArray(summary.items) ? summary.items : [];
+  const numbers = items.map((i) => i.number).filter(Boolean);
+  const queryList = numbers.length ? numbers.join(',') : '3076443058854663';
+  const cainiaoUrl = `https://global.cainiao.com/newDetail.htm?mailNoList=${encodeURIComponent(queryList)}`;
+
+  const verifyWin = new BrowserWindow({
+    width: 960,
+    height: 720,
+    title: 'Cainiao Global Tracking & Verifizierung',
+    icon: ICON_PATH,
+    webPreferences: {
+      nodeIntegration: false,
+      contextIsolation: true,
+    },
+  });
+
+  verifyWin.loadURL(cainiaoUrl);
+
+  const ses = verifyWin.webContents.session;
+  ses.cookies.on('changed', async (event, cookie, cause, removed) => {
+    if (!removed && (cookie.domain.includes('cainiao.com') || cookie.name.includes('x5sec'))) {
+      try {
+        const allCookies = await ses.cookies.get({ domain: '.cainiao.com' });
+        const cookieFile = path.join(DATA_DIR, 'cainiao_cookies.json');
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(cookieFile, JSON.stringify(allCookies, null, 2), 'utf-8');
+        const cookieStr = allCookies.map((c) => `${c.name}=${c.value}`).join('; ');
+        fs.writeFileSync(path.join(DATA_DIR, 'cookies.txt'), cookieStr, 'utf-8');
+        console.log('[Desktop] Captured Cainiao cookie:', cookie.name);
+      } catch (err) {
+        console.error('[Desktop] Failed to save cookie:', err);
+      }
+    }
+  });
+
+  verifyWin.on('closed', async () => {
+    await triggerServerRefresh();
+    const updated = await fetchTrackerSummary();
+    updateTrayMenu(updated);
+    if (mainWindow) mainWindow.reload();
+  });
+}
+
 function updateTrayMenu(summary) {
   if (!tray) return;
 
@@ -226,6 +274,12 @@ function updateTrayMenu(summary) {
         const updated = await fetchTrackerSummary();
         updateTrayMenu(updated);
         if (mainWindow) mainWindow.reload();
+      },
+    },
+    {
+      label: 'Cainiao im Fenster öffnen (Captcha lösen)',
+      click: () => {
+        openCainiaoVerificationWindow(summary);
       },
     },
     { type: 'separator' },
@@ -331,6 +385,10 @@ async function createWindow() {
 app.whenReady().then(() => {
   createTray();
   void createWindow();
+
+  if (process.argv.includes('--verify')) {
+    void fetchTrackerSummary().then((s) => openCainiaoVerificationWindow(s));
+  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

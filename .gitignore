@@ -35,5 +35,6 @@ next-env.d.ts
 tsconfig.tsbuildinfo
 /dist/
 /.wrangler/
-/outputs/
 /work/
+data/cookies.txt
+data/cainiao_cookies.json

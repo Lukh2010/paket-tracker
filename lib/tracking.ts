@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 export type TrackingEvent = {
   time: number;
   description: string;
@@ -88,61 +91,41 @@ export function formatDateDe(t: number | string): string {
 // In-memory cache for Cainiao requests (15 min TTL)
 const cainiaoCache = new Map<string, { at: number; data: TrackingData }>();
 
-export async function fetchCainiaoTracking(
-  rawNumber: string,
-  bypassCache = false,
-): Promise<TrackingData> {
-  const number = rawNumber.trim().toUpperCase().replace(/\s/g, '');
-  if (!/^[A-Z0-9]{8,40}$/.test(number)) {
-    throw new Error(
-      'Ungültige Sendungsnummer (8-40 alphanumerische Zeichen erforderlich).',
-    );
+function getCainiaoCookieHeader(): string | null {
+  const possiblePaths = [
+    path.join(
+      process.env.HOME || '/home/lukheinbach',
+      '.local/share/unterwegs',
+      'cainiao_cookies.json',
+    ),
+    path.join(
+      process.env.HOME || '/home/lukheinbach',
+      '.local/share/unterwegs',
+      'cookies.txt',
+    ),
+    path.join(process.cwd(), 'data', 'cookies.txt'),
+  ];
+
+  for (const p of possiblePaths) {
+    if (fs.existsSync(p)) {
+      try {
+        const raw = fs.readFileSync(p, 'utf-8').trim();
+        if (p.endsWith('.json')) {
+          const parsed = JSON.parse(raw);
+          if (Array.isArray(parsed)) {
+            return parsed
+              .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
+              .join('; ');
+          }
+        }
+        if (raw) return raw;
+      } catch {}
+    }
   }
+  return null;
+}
 
-  const hit = cainiaoCache.get(number);
-  if (!bypassCache && hit && Date.now() - hit.at < 15 * 60 * 1000) {
-    return hit.data;
-  }
-
-  const url = `https://global.cainiao.com/global/detail.json?mailNos=${encodeURIComponent(number)}&lang=en-US`;
-  const response = await fetch(url, {
-    signal: AbortSignal.timeout(20000),
-    headers: {
-      'User-Agent':
-        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko)',
-      Accept: 'application/json',
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(
-      `Cainiao HTTP-Fehler: ${response.status} ${response.statusText}`,
-    );
-  }
-
-  const rawText = await response.text();
-  let raw: { success?: boolean; module?: CainiaoItem[] };
-  try {
-    raw = JSON.parse(rawText);
-  } catch {
-    throw new Error(
-      'Cainiao antwortete temporär nicht mit JSON (mögliche Ratenbegrenzung). Letzter Stand bleibt erhalten.',
-    );
-  }
-
-  const item = raw.module?.find((x) => x.mailNo === number) || raw.module?.[0];
-
-  if (
-    !raw.success ||
-    !item ||
-    !item.latestTrace ||
-    !Array.isArray(item.detailList)
-  ) {
-    throw new Error(
-      'Noch keine Trackingdaten bei Cainiao hinterlegt. Bitte später erneut prüfen.',
-    );
-  }
-
+export function parseCainiaoItem(item: CainiaoItem): TrackingData {
   const events: TrackingEvent[] = (item.detailList || []).map(
     (e: Record<string, unknown>) => {
       const rawTime = e.time;
@@ -166,20 +149,126 @@ export async function fetchCainiaoTracking(
     },
   );
 
-  const data: TrackingData = {
-    number,
+  return {
+    number: item.mailNo,
     internationalNumber: item.copyRealMailNo || undefined,
-    origin: item.originCountry || 'Unbekannt',
+    origin: item.originCountry || 'China',
     destination: item.destCountry || 'Deutschland',
     status: item.status || 'UNKNOWN',
     carrier: item.destCpInfo?.cpName || 'Cainiao',
     checkedAt: new Date().toISOString(),
     events,
   };
+}
 
-  if (cainiaoCache.size > 200) cainiaoCache.clear();
-  cainiaoCache.set(number, { at: Date.now(), data });
+export async function fetchCainiaoBatch(
+  rawNumbers: string[],
+  bypassCache = false,
+): Promise<Map<string, TrackingData>> {
+  const cleanNumbers = Array.from(
+    new Set(
+      rawNumbers
+        .map((n) => n.trim().toUpperCase().replace(/\s/g, ''))
+        .filter((n) => /^[A-Z0-9]{8,40}$/.test(n)),
+    ),
+  );
 
+  const results = new Map<string, TrackingData>();
+  const toFetch: string[] = [];
+
+  for (const num of cleanNumbers) {
+    const hit = cainiaoCache.get(num);
+    if (!bypassCache && hit && Date.now() - hit.at < 15 * 60 * 1000) {
+      results.set(num, hit.data);
+    } else {
+      toFetch.push(num);
+    }
+  }
+
+  if (toFetch.length === 0) {
+    return results;
+  }
+
+  // Single batch query with comma-separated numbers (as in Home Assistant integration)
+  const url = `https://global.cainiao.com/global/detail.json?mailNos=${encodeURIComponent(toFetch.join(','))}&lang=en-US`;
+  const headers: Record<string, string> = {
+    'User-Agent':
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+    Accept: 'application/json, text/plain, */*',
+    'Accept-Language': 'en-US,en;q=0.9,de;q=0.8',
+    Referer: 'https://global.cainiao.com/',
+  };
+
+  const cookie = getCainiaoCookieHeader();
+  if (cookie) {
+    headers['Cookie'] = cookie;
+  }
+
+  const response = await fetch(url, {
+    signal: AbortSignal.timeout(20000),
+    headers,
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `Cainiao HTTP-Fehler: ${response.status} ${response.statusText}`,
+    );
+  }
+
+  const rawText = await response.text();
+  if (
+    rawText.includes('sufei-punish') ||
+    rawText.includes('punish?x5secdata=') ||
+    rawText.includes('FAIL_SYS_USER_VALIDATE') ||
+    rawText.includes('#nocaptcha')
+  ) {
+    throw new Error(
+      'Cainiao-Sicherheitsüberprüfung aktiv (WAF/Captcha). Bitte kurz warten oder Tracking über die Schaltfläche direkt aufrufen.',
+    );
+  }
+
+  let raw: { success?: boolean; module?: CainiaoItem[] };
+  try {
+    raw = JSON.parse(rawText);
+  } catch {
+    throw new Error(
+      'Cainiao antwortete temporär nicht mit JSON. Bitte später erneut prüfen.',
+    );
+  }
+
+  if (!raw.success || !Array.isArray(raw.module)) {
+    throw new Error(
+      'Noch keine Trackingdaten bei Cainiao hinterlegt. Bitte später erneut prüfen.',
+    );
+  }
+
+  for (const item of raw.module) {
+    if (!item.mailNo) continue;
+    const data = parseCainiaoItem(item);
+    results.set(item.mailNo, data);
+    cainiaoCache.set(item.mailNo, { at: Date.now(), data });
+
+    if (item.copyRealMailNo && item.copyRealMailNo !== item.mailNo) {
+      results.set(item.copyRealMailNo, data);
+      cainiaoCache.set(item.copyRealMailNo, { at: Date.now(), data });
+    }
+  }
+
+  return results;
+}
+
+export async function fetchCainiaoTracking(
+  rawNumber: string,
+  bypassCache = false,
+): Promise<TrackingData> {
+  const cleanNumber = rawNumber.trim().toUpperCase().replace(/\s/g, '');
+  const batch = await fetchCainiaoBatch([cleanNumber], bypassCache);
+  const data = batch.get(cleanNumber);
+  if (!data) {
+    throw new Error(
+      `Noch keine Trackingdaten für ${cleanNumber} verfügbar. Bitte später erneut prüfen.`,
+    );
+  }
   return data;
 }
 

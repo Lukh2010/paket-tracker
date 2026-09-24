@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+#
+# unterwegs: CLI & Desktop App launcher for the AliExpress / Cainiao Package Tracker
+#
+
+PROJECT_DIR="/home/lukheinbach/.local/bin/paket-tracker"
+DESKTOP_MAIN="$PROJECT_DIR/desktop/main.cjs"
+ELECTRON_BIN="/usr/bin/electron"
+API_URL="http://localhost:4317"
+
+case "$1" in
+  status)
+    curl -s -g "$API_URL/api/ai/summary" | jq -r '.markdownSummary // .error // "Tracker nicht erreichbar."'
+    exit 0
+    ;;
+  refresh)
+    echo "Aktualisiere Sendungsdaten von Cainiao..."
+    res=$(curl -s -g -X POST "$API_URL/api/parcels/refresh")
+    echo "$res" | jq -r 'if .success then "\(.updated) Pakete erfolgreich aktualisiert." else .error end'
+    exit 0
+    ;;
+  track)
+    if [ -z "$2" ]; then
+      echo "Nutzung: unterwegs track <SENDUNGSNUMMER>"
+      exit 1
+    fi
+    curl -s -g "$API_URL/api/track?number=$2" | jq .
+    exit 0
+    ;;
+  add)
+    if [ -z "$2" ]; then
+      echo "Nutzung: unterwegs add <SENDUNGSNUMMER> [NAME] [NOTIZ]"
+      exit 1
+    fi
+    number="$2"
+    name="${3:-Neues Paket}"
+    note="${4:-Über CLI hinzugefügt}"
+    payload=$(jq -n --arg num "$number" --arg n "$name" --arg nt "$note" '{number: $num, name: $n, note: $nt}')
+    curl -s -g -X POST "$API_URL/api/ai/parcels" -H "Content-Type: application/json" -d "$payload" | jq .
+    exit 0
+    ;;
+  verify)
+    exec "$ELECTRON_BIN" "$DESKTOP_MAIN" --verify >/dev/null 2>&1 &
+    exit 0
+    ;;
+  mcp)
+    exec /home/lukheinbach/.local/bin/unterwegs-mcp
+    ;;
+  help|--help|-h)
+    echo "Unterwegs · AliExpress Package Tracker CLI & Desktop"
+    echo ""
+    echo "Nutzung:"
+    echo "  unterwegs                 Startet oder öffnet die Desktop-App"
+    echo "  unterwegs --background    Startet die Desktop-App minimiert im System-Tray"
+    echo "  unterwegs status          Zeigt aktuelle Sendungsübersicht im Terminal"
+    echo "  unterwegs refresh         Aktualisiert alle Sendungen live von Cainiao"
+    echo "  unterwegs track <NUMMER>  Fragt eine Sendungsnummer direkt ab"
+    echo "  unterwegs add <NR> [NAME] Fügt ein neues Paket hinzu"
+    echo "  unterwegs verify          Öffnet das Cainiao-Verifizierungsfenster (Captcha lösen)"
+    echo "  unterwegs mcp             Startet den MCP-Server (für AI/LLMs)"
+    exit 0
+    ;;
+  *)
+    # Default: Launch or activate Desktop App
+    exec "$ELECTRON_BIN" "$DESKTOP_MAIN" "$@" >/dev/null 2>&1 &
+    ;;
+esac
