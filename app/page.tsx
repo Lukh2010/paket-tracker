@@ -1,5 +1,11 @@
 'use client';
-import { useEffect, useState, useRef, useCallback } from 'react';
+import {
+  useEffect,
+  useState,
+  useRef,
+  useCallback,
+  useSyncExternalStore,
+} from 'react';
 import Link from 'next/link';
 import {
   Package,
@@ -104,6 +110,12 @@ function date(t: number | string) {
 
 const KEY = 'unterwegs.parcels.v1';
 
+const noopSubscribe = () => () => {};
+const getIsDesktopSnapshot = () =>
+  typeof window !== 'undefined' &&
+  Boolean((window as unknown as { isDesktopApp?: boolean }).isDesktopApp);
+const getServerIsDesktopSnapshot = () => false;
+
 export default function Home() {
   const [parcels, setParcels] = useState<Parcel[]>(defaults);
   const [ready, setReady] = useState(false);
@@ -114,10 +126,10 @@ export default function Home() {
   const [note, setNote] = useState('');
   const [message, setMessage] = useState('');
   const [copiedAi, setCopiedAi] = useState(false);
-  const [isDesktop] = useState(
-    () =>
-      typeof window !== 'undefined' &&
-      Boolean((window as unknown as { isDesktopApp?: boolean }).isDesktopApp),
+  const isDesktop = useSyncExternalStore(
+    noopSubscribe,
+    getIsDesktopSnapshot,
+    getServerIsDesktopSnapshot,
   );
   const [expanded, setExpanded] = useState<string | null>(defaults[0].number);
   const lock = useRef(false);
