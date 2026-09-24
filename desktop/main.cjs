@@ -156,6 +156,33 @@ async function fetchTrackerSummary() {
   });
 }
 
+async function fetchTrackerParcels() {
+  return new Promise((resolve) => {
+    const req = http.request(
+      {
+        host: 'localhost',
+        port: 4317,
+        path: '/api/parcels',
+        method: 'GET',
+        timeout: 3000,
+      },
+      (res) => {
+        let body = '';
+        res.on('data', (c) => (body += c));
+        res.on('end', () => {
+          try {
+            resolve(JSON.parse(body));
+          } catch {
+            resolve(null);
+          }
+        });
+      },
+    );
+    req.on('error', () => resolve(null));
+    req.end();
+  });
+}
+
 async function triggerServerRefresh() {
   return new Promise((resolve) => {
     const req = http.request(
@@ -238,7 +265,7 @@ function updateTrayMenu(summary) {
     `Unterwegs · ${active} unterwegs, ${delivered} angekommen (Gesamt: ${total})`,
   );
 
-  // Persist backup summary to local JSON file
+  // Persist backup summary and parcels to local JSON file
   if (summary && Array.isArray(summary.items)) {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
@@ -248,6 +275,18 @@ function updateTrayMenu(summary) {
         'utf-8',
       );
     } catch {}
+
+    void fetchTrackerParcels().then((pData) => {
+      if (pData && Array.isArray(pData.parcels)) {
+        try {
+          fs.writeFileSync(
+            DATA_FILE,
+            JSON.stringify(pData.parcels, null, 2),
+            'utf-8',
+          );
+        } catch {}
+      }
+    });
   }
 
   const contextMenu = Menu.buildFromTemplate([

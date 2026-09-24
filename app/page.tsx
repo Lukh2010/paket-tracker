@@ -87,6 +87,8 @@ const defaults: Parcel[] = [
 ];
 
 const words: Record<string, string> = {
+  ORDER_PROCESSING: 'Bestellung wird vorbereitet',
+  WAITING_FOR_DELIVERY: 'Wartet auf Versand',
   CW_INBOUND: 'Im Versandlager angekommen',
   LH_DEPART: 'Abgangsland verlassen',
   LH_HO_AIRLINE: 'Für den Weiterflug bereit',

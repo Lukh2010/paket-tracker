@@ -41,6 +41,8 @@ export type CainiaoItem = {
 };
 
 export const EVENT_CODES_DE: Record<string, string> = {
+  ORDER_PROCESSING: 'Bestellung wird vorbereitet',
+  WAITING_FOR_DELIVERY: 'Wartet auf Versand',
   CW_INBOUND: 'Im Versandlager angekommen',
   CW_OUTBOUND: 'Versandlager verlassen',
   SC_INBOUND_SUCCESS: 'Im Sortierzentrum bearbeitet',

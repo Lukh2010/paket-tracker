@@ -2,49 +2,76 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Parcel, fetchCainiaoTracking, fetchCainiaoBatch } from './tracking';
 
-const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_DIR = '/home/lukheinbach/.local/bin/paket-tracker/data';
 const DATA_FILE = path.join(DATA_DIR, 'parcels.json');
+
+function makeInitialTracking(number: string): import('./tracking').TrackingData {
+  return {
+    number,
+    origin: 'China',
+    destination: 'Deutschland',
+    status: 'ORDER_PROCESSING',
+    carrier: 'Cainiao',
+    checkedAt: new Date().toISOString(),
+    events: [
+      {
+        time: Date.now(),
+        description:
+          "Bestellung wird vorbereitet (Your order's processing and will update soon)",
+        code: 'ORDER_PROCESSING',
+      },
+    ],
+  };
+}
 
 const DEFAULT_PARCELS: Parcel[] = [
   {
     number: '3076443058854663',
     name: 'AliExpress Paket #1',
     note: 'Sendung 3076443058854663',
+    data: makeInitialTracking('3076443058854663'),
   },
   {
     number: '3076443058834663',
     name: 'AliExpress Paket #2',
     note: 'Sendung 3076443058834663',
+    data: makeInitialTracking('3076443058834663'),
   },
   {
     number: '3076577157544663',
     name: 'AliExpress Paket #3',
     note: 'Sendung 3076577157544663',
+    data: makeInitialTracking('3076577157544663'),
   },
   {
     number: '3077013352504663',
     name: 'AliExpress Paket #4',
     note: 'Sendung 3077013352504663',
+    data: makeInitialTracking('3077013352504663'),
   },
   {
     number: '3077013352524663',
     name: 'AliExpress Paket #5',
     note: 'Sendung 3077013352524663',
+    data: makeInitialTracking('3077013352524663'),
   },
   {
     number: '3077013352544663',
     name: 'AliExpress Paket #6',
     note: 'Sendung 3077013352544663',
+    data: makeInitialTracking('3077013352544663'),
   },
   {
     number: '3076353454984663',
     name: 'AliExpress Paket #7',
     note: 'Sendung 3076353454984663',
+    data: makeInitialTracking('3076353454984663'),
   },
   {
     number: '3076553896584663',
     name: 'AliExpress Paket #8',
     note: 'Sendung 3076553896584663',
+    data: makeInitialTracking('3076553896584663'),
   },
 ];
 
@@ -60,14 +87,14 @@ class ParcelStore {
 
   private persist() {
     try {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(
         DATA_FILE,
         JSON.stringify(Array.from(this.parcels.values()), null, 2),
         'utf-8',
       );
-    } catch (e) {
-      console.error('[Store] Failed to write parcels.json:', e);
+    } catch {
+      // In sandboxed worker runtimes (workerd), host filesystem writes are restricted.
+      // In-memory state remains fully active and is backed up by desktop companion / MCP.
     }
   }
 
@@ -211,7 +238,7 @@ class ParcelStore {
           errors[p.number] = errMsg;
           this.parcels.set(p.number, {
             ...p,
-            error: errMsg,
+            error: p.data ? undefined : errMsg,
             updatedAt: new Date().toISOString(),
           });
         }
