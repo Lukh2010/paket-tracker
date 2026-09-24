@@ -6,7 +6,6 @@ const {
   Menu,
   nativeImage,
   Notification,
-  ipcMain,
 } = require('electron');
 const path = require('path');
 const http = require('http');
@@ -42,10 +41,6 @@ if (!gotTheLock) {
 }
 
 app.on('second-instance', (event, commandLine) => {
-  if (Array.isArray(commandLine) && (commandLine.includes('--login') || commandLine.includes('--sync-aliexpress'))) {
-    openAliExpressLoginWindow();
-    return;
-  }
   if (Array.isArray(commandLine) && commandLine.includes('--verify')) {
     void fetchTrackerSummary().then((s) => openCainiaoVerificationWindow(s));
     return;
@@ -259,217 +254,6 @@ function openCainiaoVerificationWindow(summary) {
   });
 }
 
-let aeLoginWin = null;
-let isAeSyncing = false;
-
-function extractLogisticsFromObject(obj, foundOrderId = null) {
-  if (!obj || typeof obj !== 'object') return null;
-
-  const orderId = foundOrderId || obj.tradeId || obj.orderId || obj.outOrderNo;
-  let mailNo = obj.mailNo || obj.trackingNo || obj.waybillNo || obj.logisticsNo || obj.copyRealMailNo;
-
-  if (obj.officialWebsiteTrace) {
-    if (!mailNo) mailNo = obj.officialWebsiteTrace.mailNo || obj.officialWebsiteTrace.trackingNo;
-  }
-
-  const rawEvents = obj.traceList || obj.detailList || obj.events || obj.traces || obj.packageTraceList;
-
-  if (Array.isArray(rawEvents) && rawEvents.length > 0) {
-    const events = rawEvents.map((e) => {
-      const rawTime = e.time || e.eventTime || e.gmtCreate;
-      const timeNum = typeof rawTime === 'number' ? rawTime : Date.parse(rawTime || '');
-      const description = e.desc || e.standerdDesc || e.eventDesc || e.description || 'Status-Update';
-      const code = e.actionCode || e.code || 'IN_TRANSIT';
-      return {
-        time: isNaN(timeNum) ? Date.now() : timeNum,
-        description,
-        code,
-      };
-    });
-
-    return {
-      orderId: orderId ? String(orderId) : null,
-      mailNo: mailNo ? String(mailNo) : undefined,
-      carrier: obj.cpName || obj.destCpName || 'AliExpress Standard Shipping',
-      status: obj.status || (events.length > 0 ? 'DELIVERING' : 'ORDER_PROCESSING'),
-      events,
-    };
-  }
-
-  for (const key of Object.keys(obj)) {
-    if (obj[key] && typeof obj[key] === 'object') {
-      const res = extractLogisticsFromObject(obj[key], orderId);
-      if (res) return res;
-    }
-  }
-
-  return null;
-}
-
-function sendTrackingUpdateToServer(extracted) {
-  const targetNumber = extracted.orderId || extracted.mailNo;
-  if (!targetNumber) return;
-
-  const payload = {
-    number: targetNumber,
-    internationalNumber: extracted.mailNo && extracted.mailNo !== targetNumber ? extracted.mailNo : undefined,
-    updateTracking: {
-      number: targetNumber,
-      status: extracted.status,
-      carrier: extracted.carrier,
-      events: extracted.events,
-      checkedAt: new Date().toISOString(),
-    },
-  };
-
-  const req = http.request(
-    {
-      host: 'localhost',
-      port: 4317,
-      path: '/api/parcels',
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-    },
-    () => {
-      console.log(`[Desktop] Paket ${targetNumber} erfolgreich mit Live-Daten von AliExpress synchronisiert!`);
-      void fetchTrackerSummary().then((s) => updateTrayMenu(s));
-      if (mainWindow) mainWindow.reload();
-    },
-  );
-  req.on('error', (e) => console.error('[Desktop] Fehler beim Senden des Tracking-Updates:', e));
-  req.write(JSON.stringify(payload));
-  req.end();
-}
-
-ipcMain.on('aliexpress-logistics-captured', (event, rawData) => {
-  if (!rawData || typeof rawData !== 'object') return;
-  const extracted = extractLogisticsFromObject(rawData);
-  if (extracted) {
-    console.log('[Desktop] Live-Tracking abgefangen für Order:', extracted.orderId, extracted.mailNo);
-    sendTrackingUpdateToServer(extracted);
-  }
-});
-
-ipcMain.on('aliexpress-dom-scraped', (event, data) => {
-  if (!data || !data.orderId) return;
-  console.log('[Desktop] DOM-Tracking erkannt für Order:', data.orderId, data.trackingNo);
-  if (data.trackingNo || (data.eventsText && data.eventsText.length > 0)) {
-    const events = (data.eventsText || []).map((t, idx) => ({
-      time: Date.now() - idx * 3600000,
-      description: t,
-      code: 'IN_TRANSIT',
-    }));
-
-    sendTrackingUpdateToServer({
-      orderId: data.orderId,
-      mailNo: data.trackingNo,
-      carrier: 'AliExpress Standard Shipping',
-      status: 'DELIVERING',
-      events: events.length > 0 ? events : [
-        {
-          time: Date.now(),
-          description: 'In Zustellung über AliExpress',
-          code: 'IN_TRANSIT',
-        },
-      ],
-    });
-  }
-});
-
-ipcMain.on('open-aliexpress-login', () => {
-  openAliExpressLoginWindow();
-});
-
-function openAliExpressLoginWindow() {
-  if (aeLoginWin && !aeLoginWin.isDestroyed()) {
-    aeLoginWin.show();
-    aeLoginWin.focus();
-    return;
-  }
-
-  const aePreload = path.join(__dirname, 'aliexpress_preload.cjs');
-  aeLoginWin = new BrowserWindow({
-    width: 1080,
-    height: 820,
-    title: 'AliExpress Anmeldung & Live-Synchronisation',
-    icon: ICON_PATH,
-    webPreferences: {
-      partition: 'persist:aliexpress',
-      nodeIntegration: false,
-      contextIsolation: false,
-      preload: aePreload,
-    },
-  });
-
-  aeLoginWin.loadURL('https://www.aliexpress.com/p/order/index.html');
-
-  const ses = aeLoginWin.webContents.session;
-  ses.cookies.on('changed', async (event, cookie, cause, removed) => {
-    if (!removed && cookie.domain.includes('aliexpress.com')) {
-      try {
-        const allCookies = await ses.cookies.get({ domain: '.aliexpress.com' });
-        const cookieFile = path.join(DATA_DIR, 'aliexpress_cookies.json');
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(cookieFile, JSON.stringify(allCookies, null, 2), 'utf-8');
-      } catch {}
-    }
-  });
-
-  aeLoginWin.on('closed', async () => {
-    aeLoginWin = null;
-    await syncAliExpressOrdersInBackground();
-    await triggerServerRefresh();
-    const updated = await fetchTrackerSummary();
-    updateTrayMenu(updated);
-    if (mainWindow) mainWindow.reload();
-  });
-}
-
-async function syncAliExpressOrdersInBackground() {
-  if (isAeSyncing) return;
-  isAeSyncing = true;
-  try {
-    const summary = await fetchTrackerSummary();
-    const items = summary && Array.isArray(summary.items) ? summary.items : [];
-    const pendingOrders = items.filter(
-      (i) => !i.isDelivered && /^\d{16}$/.test(i.number),
-    );
-
-    if (pendingOrders.length === 0) return;
-    console.log(`[Desktop] Synchronisiere ${pendingOrders.length} AliExpress-Sendungen im Hintergrund...`);
-
-    const aePreload = path.join(__dirname, 'aliexpress_preload.cjs');
-
-    for (const order of pendingOrders) {
-      const bgWin = new BrowserWindow({
-        width: 800,
-        height: 600,
-        show: false,
-        webPreferences: {
-          partition: 'persist:aliexpress',
-          nodeIntegration: false,
-          contextIsolation: false,
-          preload: aePreload,
-        },
-      });
-
-      const orderUrl = `https://track.aliexpress.com/logisticsdetail.htm?tradeId=${order.number}`;
-      try {
-        bgWin.loadURL(orderUrl);
-        await new Promise((r) => setTimeout(r, 6000));
-      } catch (e) {
-        console.error(`[Desktop] Fehler beim Laden von ${order.number}:`, e);
-      } finally {
-        if (!bgWin.isDestroyed()) bgWin.destroy();
-      }
-    }
-  } catch (err) {
-    console.error('[Desktop] Hintergrund-Sync Fehler:', err);
-  } finally {
-    isAeSyncing = false;
-  }
-}
-
 function updateTrayMenu(summary) {
   if (!tray) return;
 
@@ -531,22 +315,7 @@ function updateTrayMenu(summary) {
         if (mainWindow) mainWindow.reload();
       },
     },
-    {
-      label: 'AliExpress verbinden (Live-Sync)',
-      click: () => {
-        openAliExpressLoginWindow();
-      },
-    },
-    {
-      label: 'AliExpress-Sendungen im Hintergrund abrufen',
-      click: async () => {
-        tray.setToolTip('Unterwegs · Synchronisiere AliExpress...');
-        await syncAliExpressOrdersInBackground();
-        const updated = await fetchTrackerSummary();
-        updateTrayMenu(updated);
-        if (mainWindow) mainWindow.reload();
-      },
-    },
+
     {
       label: 'Cainiao im Fenster öffnen (Captcha lösen)',
       click: () => {
@@ -661,9 +430,6 @@ app.whenReady().then(() => {
     void fetchTrackerSummary().then((s) => openCainiaoVerificationWindow(s));
   }
 
-  if (process.argv.includes('--login') || process.argv.includes('--sync-aliexpress')) {
-    openAliExpressLoginWindow();
-  }
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
