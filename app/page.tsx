@@ -723,6 +723,26 @@ export default function Home() {
                     }}
                   >
                     <a
+                      href={`https://www.aliexpress.com/p/order/detail.html?orderId=${p.number}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
+                        fontSize: '12px',
+                        padding: '6px 12px',
+                        borderRadius: '6px',
+                        background: '#ff6000',
+                        color: '#ffffff',
+                        textDecoration: 'none',
+                        fontWeight: 500,
+                      }}
+                    >
+                      <ArrowUpRight size={14} />
+                      Bei AliExpress ansehen
+                    </a>
+                    <a
                       href={`https://global.cainiao.com/newDetail.htm?mailNoList=${p.number}`}
                       target="_blank"
                       rel="noopener noreferrer"
