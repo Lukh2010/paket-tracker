@@ -190,13 +190,13 @@ function updateTrayMenu(summary) {
     `Unterwegs · ${active} unterwegs, ${delivered} angekommen (Gesamt: ${total})`,
   );
 
-  // Persist backup to local JSON file
+  // Persist backup summary to local JSON file
   if (summary && Array.isArray(summary.items)) {
     try {
       fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(
-        DATA_FILE,
-        JSON.stringify(summary.items, null, 2),
+        path.join(DATA_DIR, 'summary.json'),
+        JSON.stringify(summary, null, 2),
         'utf-8',
       );
     } catch {}
