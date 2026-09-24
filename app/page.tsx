@@ -45,24 +45,44 @@ type Parcel = {
 
 const defaults: Parcel[] = [
   {
-    number: '00340000000000000004',
-    name: 'G3 Max · Hinterradmotor',
-    note: '850 W · AliExpress',
+    number: '3070000000000019',
+    name: 'AliExpress Paket #1',
+    note: 'Sendung 3070000000000019',
   },
   {
-    number: '00340000000000000003',
-    name: 'Motorrad-Lenkerteil · 22 mm',
-    note: 'Bestellt am 14. September · AliExpress',
+    number: '3070000000000018',
+    name: 'AliExpress Paket #2',
+    note: 'Sendung 3070000000000018',
   },
   {
-    number: 'AP00000000000025',
-    name: 'Gashebel & Kleinteile',
-    note: '2 × WUXING · M5×30 · D8×M5 · NFOX',
+    number: '3070000000000021',
+    name: 'AliExpress Paket #3',
+    note: 'Sendung 3070000000000021',
   },
   {
-    number: '00340000000000000005',
-    name: 'Motorrad-Lenkerteil · 22 mm',
-    note: 'Bestellt am 22. September · AliExpress',
+    number: '3070000000000022',
+    name: 'AliExpress Paket #4',
+    note: 'Sendung 3070000000000022',
+  },
+  {
+    number: '3070000000000023',
+    name: 'AliExpress Paket #5',
+    note: 'Sendung 3070000000000023',
+  },
+  {
+    number: '3070000000000024',
+    name: 'AliExpress Paket #6',
+    note: 'Sendung 3070000000000024',
+  },
+  {
+    number: '3070000000000017',
+    name: 'AliExpress Paket #7',
+    note: 'Sendung 3070000000000017',
+  },
+  {
+    number: '3070000000000020',
+    name: 'AliExpress Paket #8',
+    note: 'Sendung 3070000000000020',
   },
 ];
 

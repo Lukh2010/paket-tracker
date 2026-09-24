@@ -2,80 +2,49 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Parcel, fetchCainiaoTracking } from './tracking';
 
-const DATA_DIR = path.join(
-  process.env.HOME || '/home/example',
-  '.local/share/unterwegs',
-);
+const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'parcels.json');
 
 const DEFAULT_PARCELS: Parcel[] = [
   {
-    number: '00340000000000000004',
-    name: 'G3 Max · Hinterradmotor',
-    note: '850 W · AliExpress',
-    data: {
-      number: '00340000000000000004',
-      internationalNumber: 'CNG00000000000026',
-      origin: 'Mainland China',
-      destination: 'Germany',
-      status: 'DELIVERING',
-      carrier: 'Cainiao',
-      checkedAt: '2026-09-24T07:00:00.000Z',
-      events: [
-        { time: 0000000000013, description: 'Departed from departure country/region', code: 'LH_DEPART' },
-        { time: 0000000000011, description: 'Leaving from departure country/region', code: 'LH_HO_AIRLINE' },
-        { time: 0000000000009, description: 'Export customs clearance complete', code: 'CC_EX_SUCCESS' },
-      ],
-    },
+    number: '3070000000000019',
+    name: 'AliExpress Paket #1',
+    note: 'Sendung 3070000000000019',
   },
   {
-    number: '00340000000000000003',
-    name: 'Motorrad-Lenkerteil · 22 mm',
-    note: 'Bestellt am 14. September · AliExpress',
-    data: {
-      number: '00340000000000000003',
-      origin: 'Mainland China',
-      destination: 'Germany',
-      status: 'DELIVERING',
-      carrier: 'Cainiao',
-      checkedAt: '2026-09-24T07:00:00.000Z',
-      events: [
-        { time: 0000000000008, description: 'Departed from departure country/region', code: 'LH_DEPART' },
-        { time: 0000000000007, description: 'Leaving from departure country/region', code: 'LH_HO_AIRLINE' },
-      ],
-    },
+    number: '3070000000000018',
+    name: 'AliExpress Paket #2',
+    note: 'Sendung 3070000000000018',
   },
   {
-    number: 'AP00000000000025',
-    name: 'Gashebel & Kleinteile',
-    note: '2 × WUXING · M5×30 · D8×M5 · NFOX',
-    data: {
-      number: 'AP00000000000025',
-      origin: 'Mainland China',
-      destination: 'Germany',
-      status: 'DELIVERING',
-      carrier: 'Cainiao',
-      checkedAt: '2026-09-24T07:00:00.000Z',
-      events: [
-        { time: 0000000000010, description: 'Received by warehouse', code: 'CW_INBOUND' },
-      ],
-    },
+    number: '3070000000000021',
+    name: 'AliExpress Paket #3',
+    note: 'Sendung 3070000000000021',
   },
   {
-    number: '00340000000000000005',
-    name: 'Motorrad-Lenkerteil · 22 mm',
-    note: 'Bestellt am 22. September · AliExpress',
-    data: {
-      number: '00340000000000000005',
-      origin: 'Mainland China',
-      destination: 'Germany',
-      status: 'DELIVERING',
-      carrier: 'Cainiao',
-      checkedAt: '2026-09-24T07:00:00.000Z',
-      events: [
-        { time: 0000000000012, description: '[Dongguan] Departed from sorting center', code: 'SC_OUTBOUND_SUCCESS' },
-      ],
-    },
+    number: '3070000000000022',
+    name: 'AliExpress Paket #4',
+    note: 'Sendung 3070000000000022',
+  },
+  {
+    number: '3070000000000023',
+    name: 'AliExpress Paket #5',
+    note: 'Sendung 3070000000000023',
+  },
+  {
+    number: '3070000000000024',
+    name: 'AliExpress Paket #6',
+    note: 'Sendung 3070000000000024',
+  },
+  {
+    number: '3070000000000017',
+    name: 'AliExpress Paket #7',
+    note: 'Sendung 3070000000000017',
+  },
+  {
+    number: '3070000000000020',
+    name: 'AliExpress Paket #8',
+    note: 'Sendung 3070000000000020',
   },
 ];
 
