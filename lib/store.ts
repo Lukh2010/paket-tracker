@@ -2,10 +2,14 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { Parcel, fetchCainiaoTracking, fetchCainiaoBatch } from './tracking';
 
+declare const __UNTERWEGS_PARCEL_BOOTSTRAP__: Parcel[];
+
 const DATA_DIR = '/home/lukheinbach/.local/bin/paket-tracker/data';
 const DATA_FILE = path.join(DATA_DIR, 'parcels.json');
 
-function makeInitialTracking(number: string): import('./tracking').TrackingData {
+function makeInitialTracking(
+  number: string,
+): import('./tracking').TrackingData {
   return {
     number,
     origin: 'China',
@@ -109,7 +113,10 @@ class ParcelStore {
           for (const p of list) {
             if (p && p.number) {
               const trackingData =
-                p.data && p.data.events && p.data.events.length > 0 && p.data.status !== 'UNKNOWN'
+                p.data &&
+                p.data.events &&
+                p.data.events.length > 0 &&
+                p.data.status !== 'UNKNOWN'
                   ? p.data
                   : makeInitialTracking(p.number);
 
@@ -129,7 +136,11 @@ class ParcelStore {
       }
     }
 
-    for (const p of DEFAULT_PARCELS) {
+    const saved =
+      typeof __UNTERWEGS_PARCEL_BOOTSTRAP__ !== 'undefined'
+        ? __UNTERWEGS_PARCEL_BOOTSTRAP__
+        : [];
+    for (const p of saved.length ? saved : DEFAULT_PARCELS) {
       this.parcels.set(p.number, {
         ...p,
         createdAt: new Date().toISOString(),
@@ -207,7 +218,8 @@ class ParcelStore {
     existing.data = {
       ...currentData,
       ...data,
-      internationalNumber: internationalNumber || currentData.internationalNumber,
+      internationalNumber:
+        internationalNumber || currentData.internationalNumber,
       checkedAt: new Date().toISOString(),
     };
     existing.updatedAt = new Date().toISOString();
@@ -239,15 +251,24 @@ class ParcelStore {
         return { updated: 0, errors };
       }
 
-      const numbers = targets.map((t) => t.number);
+      const numbers = targets.map(
+        (t) => t.number.startsWith('307') ? t.data?.internationalNumber || t.number : t.number,
+      );
       try {
         const batchResults = await fetchCainiaoBatch(numbers, true);
         for (const p of targets) {
-          const freshData = batchResults.get(p.number);
+          const freshData = batchResults.get(
+            p.number.startsWith('307') ? p.data?.internationalNumber || p.number : p.number,
+          );
           if (freshData) {
             this.parcels.set(p.number, {
               ...p,
-              data: freshData,
+              data: {
+                ...freshData,
+                number: p.number,
+                internationalNumber:
+                  p.data?.internationalNumber || freshData.internationalNumber,
+              },
               error: undefined,
               updatedAt: new Date().toISOString(),
             });
@@ -261,8 +282,7 @@ class ParcelStore {
           }
         }
       } catch (err: unknown) {
-        const errMsg =
-          err instanceof Error ? err.message : 'Verbindungsfehler';
+        const errMsg = err instanceof Error ? err.message : 'Verbindungsfehler';
         for (const p of targets) {
           errors[p.number] = errMsg;
           this.parcels.set(p.number, {
