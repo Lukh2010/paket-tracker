@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
@@ -44,7 +45,20 @@ export default defineConfig(async () => {
   // Wrangler snapshots its log path while the Cloudflare plugin is imported.
   const { cloudflare } = await import('@cloudflare/vite-plugin');
 
+  // workerd cannot read the host filesystem; load the desktop backup in Vite's
+  // Node process so restarting the local service preserves the parcel list.
+  let parcelBootstrap = [];
+  try {
+    const saved = JSON.parse(
+      fs.readFileSync(new URL('./data/parcels.json', import.meta.url), 'utf8'),
+    );
+    if (Array.isArray(saved)) parcelBootstrap = saved;
+  } catch {
+    /* First launch has no backup yet. */
+  }
+
   return {
+    define: { __UNTERWEGS_PARCEL_BOOTSTRAP__: JSON.stringify(parcelBootstrap) },
     css: { postcss: { plugins: [tailwindcss()] } },
     server: isCodexSeatbeltSandbox
       ? { watch: { useFsEvents: false, usePolling: true } }

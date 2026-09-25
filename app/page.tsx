@@ -14,15 +14,22 @@ import {
   Plus,
   Plane,
   Check,
-  ChevronDown,
+  ChevronRight,
+  MoreHorizontal,
+  X,
   Trash2,
   Truck,
   MapPin,
   Sparkles,
-  CheckCheck,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
 
 type Event = { time: number; description: string; code: string };
 type Data = {
@@ -106,7 +113,14 @@ const words: Record<string, string> = {
 };
 
 function label(e?: Event) {
-  return e ? words[e.code] || e.description : 'Status wird abgerufen';
+  if (!e) return 'Status wird abgerufen';
+  if (
+    /arrived in transit country|arrived at transit country/i.test(e.description)
+  )
+    return 'Im Transitland angekommen';
+  if (/arrived at linehaul office/i.test(e.description))
+    return 'Am Transportknoten angekommen';
+  return words[e.code] || e.description;
 }
 
 function delivered(p: Parcel) {
@@ -432,61 +446,85 @@ export default function Home() {
 
   const active = parcels.filter((p) => !delivered(p)).length;
 
+  const selected = parcels.find((p) => p.number === expanded) || parcels[0];
+  const latest = selected?.data?.events?.[0];
+  const country = (value?: string) =>
+    value === 'Mainland China'
+      ? 'China'
+      : value === 'Germany'
+        ? 'Deutschland'
+        : value || 'Noch unbekannt';
+  const events = selected?.data?.events || [];
+  const stages = [
+    {
+      name: 'Versendet',
+      icon: Package,
+      confirmed: events.some((e) =>
+        ['PU_PICKUP_SUCCESS', 'SC_OUTBOUND_SUCCESS'].includes(e.code),
+      ),
+    },
+    {
+      name: 'Abgeflogen',
+      icon: Plane,
+      confirmed: events.some((e) => e.code === 'LH_DEPART'),
+    },
+    {
+      name: 'Zielland',
+      icon: MapPin,
+      confirmed: events.some(
+        (e) =>
+          ['CC_IM_START', 'CC_IM_SUCCESS'].includes(e.code) ||
+          (e.code === 'LH_ARRIVE' &&
+            /destination country|destination region|Zielland/i.test(
+              e.description,
+            )),
+      ),
+    },
+    {
+      name: 'An DHL übergeben',
+      icon: Truck,
+      confirmed: events.some((e) => {
+        const isDhl =
+          /dhl/i.test(selected?.data?.carrier || '') ||
+          (selected?.number || '').startsWith('0034') ||
+          (selected?.data?.internationalNumber || '').startsWith('0034');
+        const explicitDhlHandover =
+          /(?:received|accepted|collected) by dhl|(?:handed over|delivered) to dhl|an dhl übergeben|von dhl (?:übernommen|bearbeitet)/i.test(
+            e.description,
+          );
+        const localHandover =
+          /received by (?:the )?local delivery company|(?:handed over|delivered) to (?:the )?(?:local delivery company|last.mile carrier)/i.test(
+            e.description,
+          );
+        return (
+          explicitDhlHandover ||
+          (isDhl &&
+            (localHandover ||
+              ['GTMS_DELIVERING', 'GTMS_SIGNED', 'SIGN_SUCCESS'].includes(
+                e.code,
+              )))
+        );
+      }),
+    },
+    {
+      name: 'Zugestellt',
+      icon: Check,
+      confirmed: !!selected && delivered(selected),
+    },
+  ];
   return (
-    <main className="workspace">
-      <header className="topbar">
+    <main className="desktop-workspace">
+      <header className="app-toolbar">
         <Link className="brand" href="/">
           <span className="brand-icon">
-            <Package size={22} />
+            <Package size={21} />
           </span>
           unterwegs<span className="brand-dot">.</span>
         </Link>
-        <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
-          {isDesktop && (
-            <span
-              style={{
-                fontSize: '12px',
-                fontWeight: 600,
-                background: '#e8f3de',
-                color: '#284e23',
-                padding: '4px 10px',
-                borderRadius: '8px',
-              }}
-            >
-              Desktop App
-            </span>
-          )}
-          <span className="local">
-            <span />
-            Hintergrund & KI aktiv
-          </span>
-        </div>
-      </header>
-
-      <section className="heading">
-        <div>
-          <p className="eyebrow">ALLES IM BLICK</p>
-          <h1>Deine Pakete.</h1>
-          <p className="subline">
-            {active} unterwegs <span>·</span> {parcels.length - active}{' '}
-            angekommen
-          </p>
-        </div>
-        <div className="actions">
-          <Button
-            variant="outline"
-            onClick={copyAiSummary}
-            className="action"
-            title="Kopiert die aktuelle Status-Übersicht formatiert für Chat-Modelle wie ChatGPT, Claude oder Antigravity"
-          >
-            {copiedAi ? (
-              <CheckCheck size={16} style={{ color: '#2d6a4f' }} />
-            ) : (
-              <Sparkles size={16} />
-            )}
-            {copiedAi ? 'KI-Text kopiert!' : 'KI-Zusammenfassung'}
-          </Button>
-
+        <span className="toolbar-context">
+          {isDesktop ? 'Desktop' : 'Paketübersicht'}
+        </span>
+        <div className="toolbar-actions">
           <Button
             variant="outline"
             disabled={busy}
@@ -494,17 +532,39 @@ export default function Home() {
             className="action"
           >
             <RefreshCw size={16} className={busy ? 'spin' : ''} />
-            {busy ? 'Wird aktualisiert' : 'Aktualisieren'}
+            <span>{busy ? 'Aktualisieren …' : 'Aktualisieren'}</span>
           </Button>
-
-
-          <Button className="action primary" onClick={() => setAdding(!adding)}>
+          <Button
+            className="action primary"
+            onClick={() => setAdding(!adding)}
+            aria-expanded={adding}
+          >
             <Plus size={18} />
-            Paket hinzufügen
+            <span>Paket hinzufügen</span>
           </Button>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  variant="ghost"
+                  className="menu-trigger"
+                  aria-label="Weitere Aktionen"
+                />
+              }
+            >
+              <MoreHorizontal size={21} />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={copyAiSummary}>
+                <Sparkles size={16} />
+                {copiedAi
+                  ? 'Zusammenfassung kopiert'
+                  : 'KI-Zusammenfassung kopieren'}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
-      </section>
-
+      </header>
       {adding && (
         <form className="add-form" onSubmit={add}>
           <label htmlFor="parcel-name-input">
@@ -513,7 +573,7 @@ export default function Home() {
               id="parcel-name-input"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Zum Beispiel: Ersatzteile oder Hinterradmotor"
+              placeholder="Zum Beispiel: Hinterradmotor"
               maxLength={100}
             />
           </label>
@@ -524,7 +584,7 @@ export default function Home() {
               required
               value={number}
               onChange={(e) => setNumber(e.target.value)}
-              placeholder="Sendungsnummer (z. B. 0034... oder AP...)"
+              placeholder="0034… oder AP…"
               maxLength={80}
             />
           </label>
@@ -534,314 +594,278 @@ export default function Home() {
               id="parcel-note-input"
               value={note}
               onChange={(e) => setNote(e.target.value)}
-              placeholder="z. B. 850 W · AliExpress"
+              placeholder="850 W · AliExpress"
               maxLength={100}
             />
           </label>
           <Button disabled={busy} type="submit" className="action primary">
             Hinzufügen
           </Button>
+          <Button
+            variant="ghost"
+            type="button"
+            onClick={() => setAdding(false)}
+            aria-label="Formular schließen"
+          >
+            <X size={18} />
+          </Button>
         </form>
       )}
-
       {message && (
-        <p role="alert" className="notice">
+        <output className="app-message">
           {message}
-        </p>
+        </output>
       )}
-
-      <div className="parcel-list" aria-busy={busy}>
-        {!parcels.length && (
-          <div className="empty">
-            <Package size={36} />
-            <h2>Noch nichts unterwegs.</h2>
-            <p>Füge dein erstes Paket mit seiner Sendungsnummer hinzu.</p>
+      <div className="split-layout">
+        <aside className="shipment-sidebar" aria-label="Deine Pakete">
+          <div className="sidebar-heading">
+            <div>
+              <h1>Deine Pakete</h1>
+              <p>
+                {active} unterwegs <span>·</span> {parcels.length - active}{' '}
+                angekommen
+              </p>
+            </div>
+            <span className="parcel-count">{parcels.length}</span>
           </div>
-        )}
-
-        {parcels.map((p, i) => {
-          const open = expanded === p.number;
-          const e = p.data?.events?.[0];
-          const done = delivered(p);
-
-          return (
-            <article
-              className={
-                'parcel ' +
-                (i === 0 ? 'featured ' : '') +
-                (done ? 'delivered' : '')
-              }
-              key={p.number}
-            >
-              <button
-                className="parcel-head"
-                aria-expanded={open}
-                onClick={() => setExpanded(open ? null : p.number)}
-              >
-                <span className="parcel-icon">
-                  {done ? (
-                    <Check size={24} />
-                  ) : i === 0 ? (
-                    <Plane size={24} />
-                  ) : (
-                    <Package size={24} />
-                  )}
-                </span>
-                <span className="parcel-name">
-                  <strong>{p.name}</strong>
-                  <span>{p.note}</span>
-                </span>
-                <span className={'status ' + (done ? 'done' : '')}>
-                  {done
-                    ? 'Angekommen'
-                    : p.data
-                      ? 'Unterwegs'
-                      : p.error
-                        ? 'Kein aktueller Status'
-                        : 'Wird geprüft'}
-                </span>
-                <ChevronDown
-                  size={20}
-                  className={open ? 'chevron open' : 'chevron'}
-                />
-              </button>
-
-              <div className="latest">
-                <span className="latest-dot" />
-                <div>
-                  <strong>{label(e)}</strong>
-                  <p>
-                    {e
-                      ? date(e.time)
-                      : p.error
-                        ? 'Noch kein Verlauf verfügbar.'
-                        : 'Cainiao wird abgefragt …'}
-                  </p>
-                </div>
-                {p.data && (
-                  <span className="route">
-                    {p.data.origin === 'Mainland China'
-                      ? 'China'
-                      : p.data.origin}
-                    <ArrowUpRight size={16} />
-                    {p.data.destination === 'Germany'
-                      ? 'Deutschland'
-                      : p.data.destination}
-                  </span>
-                )}
-              </div>
-
-              {p.error && (
-                <div
-                  style={{
-                    margin: '8px 16px 12px 16px',
-                    padding: '10px 14px',
-                    borderRadius: '8px',
-                    background: '#fff8e6',
-                    border: '1px solid #f6e05e',
-                    color: '#744210',
-                    fontSize: '13px',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: '6px',
-                  }}
+          <nav
+            className="shipment-list"
+            aria-label="Paket auswählen"
+            aria-busy={busy}
+          >
+            {parcels.map((p) => {
+              const e = p.data?.events?.[0],
+                chosen = selected?.number === p.number;
+              return (
+                <button
+                  key={p.number}
+                  className={'shipment-row ' + (chosen ? 'selected' : '')}
+                  aria-current={chosen ? 'true' : undefined}
+                  onClick={() => setExpanded(p.number)}
                 >
-                  <div style={{ fontWeight: 600 }}>⚠️ {p.error}</div>
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: '10px',
-                      flexWrap: 'wrap',
-                      marginTop: '2px',
-                    }}
+                  <span
+                    className={'row-icon ' + (delivered(p) ? 'arrived' : '')}
                   >
-                    <a
-                      href={`https://global.cainiao.com/newDetail.htm?mailNoList=${p.number}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        color: '#c53030',
-                        textDecoration: 'underline',
-                        fontWeight: 600,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                      }}
-                    >
-                      <ArrowUpRight size={14} />
-                      Auf Cainiao öffnen
-                    </a>
-                    <span style={{ color: '#aaa' }}>·</span>
-                    <a
-                      href={`https://t.17track.net/en#nums=${p.number}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        color: '#2b6cb0',
-                        textDecoration: 'underline',
-                        fontWeight: 600,
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '4px',
-                      }}
-                    >
-                      <ArrowUpRight size={14} />
-                      Auf 17TRACK öffnen
-                    </a>
-                  </div>
+                    {delivered(p) ? <Check size={18} /> : <Package size={18} />}
+                  </span>
+                  <span className="row-copy">
+                    <strong>{p.name}</strong>
+                    <span className={p.error ? 'row-error' : ''}>
+                      {p.error
+                        ? 'Abruf fehlgeschlagen'
+                        : e
+                          ? label(e)
+                          : 'Noch kein Versandstatus'}
+                    </span>
+                    <time>{e ? date(e.time) : 'Warte auf Trackingdaten'}</time>
+                  </span>
+                  <ChevronRight size={16} className="row-arrow" />
+                </button>
+              );
+            })}
+            {!parcels.length && (
+              <p className="sidebar-empty">Deine Pakete erscheinen hier.</p>
+            )}
+          </nav>
+          <div className="sidebar-footer">
+            <span className="connection-dot" />
+            AliExpress · Cainiao
+          </div>
+        </aside>
+        <section
+          className="shipment-detail"
+          aria-label="Sendungsdetails"
+          key={selected?.number || 'empty'}
+        >
+          {!selected ? (
+            <div className="empty">
+              <Package size={40} />
+              <h2>Noch nichts unterwegs.</h2>
+              <p>Füge ein Paket hinzu, um seinen Versandweg zu verfolgen.</p>
+              <Button
+                className="action primary"
+                onClick={() => setAdding(true)}
+              >
+                <Plus size={16} />
+                Paket hinzufügen
+              </Button>
+            </div>
+          ) : (
+            <>
+              <header className="detail-heading">
+                <div>
+                  <p className="detail-kicker">SENDUNGSDETAILS</p>
+                  <h2>{selected.name}</h2>
+                  {selected.note &&
+                    !/^(Sendung |AliExpress Ref:|Über KI hinzugefügt)/.test(
+                      selected.note,
+                    ) && <p className="detail-note">{selected.note}</p>}
                 </div>
-              )}
-
-              {open && (
-                <div className="details">
-                  <div className="detail-meta">
-                    <div>
-                      <small>SENDUNGSNUMMER</small>
-                      <span>{p.number}</span>
-                      {p.data?.internationalNumber &&
-                        p.data.internationalNumber !== p.number && (
-                          <span className="secondary-number">
-                            International: {p.data.internationalNumber}
-                          </span>
-                        )}
-                    </div>
-                    <div>
-                      <small>LETZTER ABRUF</small>
-                      <span>
-                        {p.data
-                          ? date(p.data.checkedAt)
-                          : 'Noch nicht verfügbar'}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div
-                    style={{
-                      display: 'flex',
-                      gap: '8px',
-                      flexWrap: 'wrap',
-                      margin: '12px 0 16px 0',
-                    }}
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    render={
+                      <Button
+                        variant="ghost"
+                        aria-label="Aktionen für dieses Paket"
+                        className="menu-trigger"
+                      />
+                    }
                   >
-                    <a
-                      href={`https://www.aliexpress.com/p/order/detail.html?orderId=${p.number}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        fontSize: '12px',
-                        padding: '6px 12px',
-                        borderRadius: '6px',
-                        background: '#ff6000',
-                        color: '#ffffff',
-                        textDecoration: 'none',
-                        fontWeight: 500,
-                      }}
+                    <MoreHorizontal size={20} />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => removeParcel(selected.number)}
                     >
-                      <ArrowUpRight size={14} />
-                      Bei AliExpress ansehen
-                    </a>
-                    <a
-                      href={`https://global.cainiao.com/newDetail.htm?mailNoList=${p.number}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        fontSize: '12px',
-                        padding: '6px 12px',
-                        borderRadius: '6px',
-                        background: '#e02424',
-                        color: '#ffffff',
-                        textDecoration: 'none',
-                        fontWeight: 500,
-                      }}
-                    >
-                      <ArrowUpRight size={14} />
-                      Bei Cainiao Global öffnen
-                    </a>
-                    <a
-                      href={`https://t.17track.net/en#nums=${p.number}`}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      style={{
-                        display: 'inline-flex',
-                        alignItems: 'center',
-                        gap: '6px',
-                        fontSize: '12px',
-                        padding: '6px 12px',
-                        borderRadius: '6px',
-                        background: '#0284c7',
-                        color: '#ffffff',
-                        textDecoration: 'none',
-                        fontWeight: 500,
-                      }}
-                    >
-                      <ArrowUpRight size={14} />
-                      Bei 17TRACK prüfen
-                    </a>
+                      <Trash2 size={16} />
+                      Paket entfernen
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </header>
+              <div className="status-panel">
+                <div className="status-panel-top">
+                  <span className="status-label">
+                    <span />
+                    {delivered(selected)
+                      ? 'Zugestellt'
+                      : latest
+                        ? 'Unterwegs'
+                        : 'Status ausstehend'}
+                  </span>
+                  <time>{latest ? date(latest.time) : 'Noch kein Scan'}</time>
+                </div>
+                <h3>
+                  {latest
+                    ? label(latest)
+                    : selected.error
+                      ? 'Status nicht verfügbar'
+                      : 'Warte auf Trackingdaten'}
+                </h3>
+                <div className="country-route">
+                  <span>{country(selected.data?.origin)}</span>
+                  <span className="route-line" />
+                  <Plane size={17} />
+                  <span className="route-line" />
+                  <span>{country(selected.data?.destination)}</span>
+                </div>
+              </div>
+              {selected.error && (
+                <output className="notice">
+                  {selected.error}
+                  {selected.data
+                    ? ' Angezeigt wird der letzte erfolgreiche Abruf.'
+                    : ''}
+                </output>
+              )}
+              <div
+                className="milestones"
+                aria-label="Bestätigte Versandstationen"
+              >
+                {stages.map((s) => (
+                  <div
+                    key={s.name}
+                    className={'milestone ' + (s.confirmed ? 'confirmed' : '')}
+                  >
+                    <span className="milestone-icon">
+                      <s.icon size={18} />
+                    </span>
+                    <span>{s.name}</span>
+                    <small>
+                      {s.confirmed ? 'Bestätigt' : 'Noch kein Scan'}
+                    </small>
                   </div>
-
-                  <h3>Versandverlauf</h3>
+                ))}
+              </div>
+              <div className="detail-columns">
+                <section className="history-section">
+                  <div className="section-heading">
+                    <h3>Versandverlauf</h3>
+                    <span>{events.length} Meldungen</span>
+                  </div>
                   <ol className="timeline">
-                    {p.data?.events.map((event, index) => (
+                    {events.map((event, index) => (
                       <li key={event.time + '-' + index}>
                         <span
                           className={
-                            'timeline-dot ' + (!index ? 'current' : '')
+                            'timeline-dot ' + (index === 0 ? 'current' : '')
                           }
                         />
                         <div>
                           <strong>{label(event)}</strong>
-                          {words[event.code] &&
-                            event.description !== label(event) && (
-                              <p>{event.description}</p>
-                            )}
                           <time>{date(event.time)}</time>
+                          {label(event) !== event.description && (
+                            <p>{event.description}</p>
+                          )}
                         </div>
                       </li>
                     ))}
                   </ol>
-
-                  {!p.data && (
+                  {!events.length && (
                     <p className="muted">
-                      Der Verlauf erscheint nach dem ersten erfolgreichen Abruf.
+                      Hier erscheint der Verlauf, sobald Trackingdaten
+                      vorliegen.
                     </p>
                   )}
-
-                  <div className="detail-footer">
-                    <span>
-                      <MapPin size={14} />
-                      Zeiten in Deutschland · Quelle: Cainiao
-                    </span>
-                    <Button
-                      variant="ghost"
-                      onClick={() => removeParcel(p.number)}
+                </section>
+                <aside className="package-facts">
+                  <h3>Paketinformationen</h3>
+                  <dl>
+                    <dt>Sendungsnummer / Referenz</dt>
+                    <dd>{selected.number}</dd>
+                    {selected.data?.internationalNumber &&
+                      selected.data.internationalNumber !== selected.number && (
+                        <>
+                          <dt>Internationale Nummer</dt>
+                          <dd>{selected.data.internationalNumber}</dd>
+                        </>
+                      )}
+                    <dt>Letzter erfolgreicher Abruf</dt>
+                    <dd>
+                      {selected.data
+                        ? date(selected.data.checkedAt)
+                        : 'Noch nicht verfügbar'}
+                    </dd>
+                    <dt>Datenquelle</dt>
+                    <dd>Cainiao</dd>
+                  </dl>
+                  <div className="tracking-links">
+                    {selected.number.startsWith('307') && (
+                      <a
+                        href={`https://www.aliexpress.com/p/order/detail.html?orderId=${encodeURIComponent(selected.number)}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                      >
+                        AliExpress <ArrowUpRight size={15} />
+                      </a>
+                    )}
+                    <a
+                      href={`https://global.cainiao.com/newDetail.htm?mailNoList=${encodeURIComponent(selected.data?.internationalNumber || selected.number)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
                     >
-                      <Trash2 size={15} />
-                      Entfernen
-                    </Button>
+                      Cainiao Global <ArrowUpRight size={15} />
+                    </a>
+                    <a
+                      href={`https://t.17track.net/en#nums=${encodeURIComponent(selected.data?.internationalNumber || selected.number)}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      17TRACK <ArrowUpRight size={15} />
+                    </a>
                   </div>
-                </div>
-              )}
-            </article>
-          );
-        })}
+                </aside>
+              </div>
+              <footer className="detail-bottom">
+                <MapPin size={13} />
+                Alle Zeiten in Deutschland. Stationen werden nur bei passendem
+                Scan bestätigt.
+              </footer>
+            </>
+          )}
+        </section>
       </div>
-
-      <footer className="footer">
-        <span>
-          <Truck size={16} />
-          Vom ersten Scan bis vor deine Tür · KI-Schnittstelle & Desktop-Dienst
-          aktiv
-        </span>
-        <span>
-          Aktualisierung beim Öffnen · Abrufe 15 Minuten zwischengespeichert
-        </span>
-      </footer>
     </main>
   );
 }
