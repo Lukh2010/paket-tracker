@@ -9,6 +9,7 @@ const {
   shell,
   utilityProcess,
   dialog,
+  ipcMain,
 } = require('electron');
 const path = require('path');
 const http = require('http');
@@ -320,18 +321,26 @@ function openCainiaoVerificationWindow(summary) {
   ses.cookies.on('changed', async (event, cookie, cause, removed) => {
     if (
       !removed &&
-      (cookie.domain.includes('cainiao.com') || cookie.name.includes('x5sec'))
+      (cookie.domain.includes('cainiao') ||
+        cookie.name.includes('x5sec') ||
+        cookie.domain.includes('aliexpress'))
     ) {
       try {
-        const allCookies = await ses.cookies.get({ domain: '.cainiao.com' });
+        const allCookies = await ses.cookies.get({});
+        const relevantCookies = allCookies.filter(
+          (c) =>
+            c.domain.includes('cainiao') ||
+            c.name.includes('x5sec') ||
+            c.domain.includes('aliexpress'),
+        );
         const cookieFile = path.join(DATA_DIR, 'cainiao_cookies.json');
         fs.mkdirSync(DATA_DIR, { recursive: true });
         fs.writeFileSync(
           cookieFile,
-          JSON.stringify(allCookies, null, 2),
+          JSON.stringify(relevantCookies, null, 2),
           'utf-8',
         );
-        const cookieStr = allCookies
+        const cookieStr = relevantCookies
           .map((c) => `${c.name}=${c.value}`)
           .join('; ');
         fs.writeFileSync(
@@ -359,6 +368,13 @@ function openCainiaoVerificationWindow(summary) {
     }
   });
 }
+
+// IPC handler to allow renderer UI to trigger verification window directly
+ipcMain.handle('unterwegs:open-verify', async () => {
+  const summary = await fetchTrackerSummary();
+  openCainiaoVerificationWindow(summary);
+  return { success: true };
+});
 
 function updateTrayMenu(summary) {
   if (!tray) return;

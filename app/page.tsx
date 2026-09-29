@@ -37,6 +37,9 @@ import {
   Pencil,
   Calendar,
   ArrowLeft,
+  ShieldAlert,
+  ShieldCheck,
+  ExternalLink,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -195,6 +198,7 @@ export default function Home() {
   const [note, setNote] = useState('');
   const [message, setMessage] = useState('');
   const [copiedAi, setCopiedAi] = useState(false);
+  const [showVerifyModal, setShowVerifyModal] = useState(false);
   const isDesktop = useSyncExternalStore(
     noopSubscribe,
     getIsDesktopSnapshot,
@@ -351,10 +355,22 @@ export default function Home() {
         if (data.errors && Object.keys(data.errors).length > 0) {
           const errorCount = Object.keys(data.errors).length;
           const firstError = Object.values(data.errors)[0];
+          const hasWaf = Object.values(data.errors).some(
+            (e) =>
+              e.includes('WAF') ||
+              e.includes('Captcha') ||
+              e.includes('Sicherheitsüberprüfung'),
+          );
+          if (hasWaf) {
+            setShowVerifyModal(true);
+          }
           toast.create({
-            title: 'Aktualisierung mit Fehlern',
-            description:
-              errorCount === 1
+            title: hasWaf
+              ? 'Cainiao-Verifizierung erforderlich'
+              : 'Aktualisierung mit Fehlern',
+            description: hasWaf
+              ? 'Cainiao verlangt ein Captcha. Bitte Verifizierungsfenster öffnen.'
+              : errorCount === 1
                 ? firstError || 'Ein Paket konnte nicht aktualisiert werden.'
                 : `${errorCount} Pakete konnten nicht aktualisiert werden.`,
             type: 'warning',
@@ -588,6 +604,32 @@ export default function Home() {
         p.items.some((i) => trackingNumbers(i).includes(expanded || '')),
     ) || (isMobile ? null : shipments[0]);
 
+  const openVerification = () => {
+    const dt = (
+      window as unknown as {
+        unterwegsDesktop?: { openVerifyWindow?: () => Promise<unknown> };
+      }
+    ).unterwegsDesktop;
+    if (dt?.openVerifyWindow) {
+      void dt.openVerifyWindow();
+      setShowVerifyModal(false);
+      return;
+    }
+    const numbers = (
+      selected
+        ? [selected.number, ...selected.items.map((i) => i.number)]
+        : parcels.map((p) => p.number)
+    ).filter(Boolean);
+    const queryList = numbers.join(',');
+    const cainiaoUrl = `https://global.cainiao.com/newDetail.htm?mailNoList=${encodeURIComponent(queryList)}`;
+    window.open(
+      cainiaoUrl,
+      '_blank',
+      'noopener,noreferrer,width=960,height=720',
+    );
+    setShowVerifyModal(false);
+  };
+
   const isEditing = Boolean(editingId && selected && editingId === selected.id);
 
   const handleStartEdit = () => {
@@ -818,6 +860,10 @@ export default function Home() {
                 {copiedAi
                   ? 'Zusammenfassung kopiert'
                   : 'KI-Zusammenfassung kopieren'}
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={openVerification}>
+                <ShieldCheck size={16} />
+                Cainiao-Verifizierung (Captcha)
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1181,12 +1227,44 @@ export default function Home() {
                 </section>
               )}
               {selected.error && (
-                <output className="notice">
-                  Aktualisierung fehlgeschlagen: {selected.error}
-                  {selected.data
-                    ? ' Angezeigt wird der letzte erfolgreiche Abruf.'
-                    : ''}
-                </output>
+                selected.error.includes('WAF') ||
+                selected.error.includes('Captcha') ||
+                selected.error.includes('Sicherheitsüberprüfung') ? (
+                  <div className="waf-alert-card flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3.5 my-3 rounded-xl border border-amber-300 dark:border-amber-700/60 bg-amber-50/80 dark:bg-amber-950/30 text-amber-950 dark:text-amber-200 shadow-xs">
+                    <div className="flex items-start gap-2.5">
+                      <ShieldAlert
+                        size={20}
+                        className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5"
+                      />
+                      <div className="text-xs sm:text-sm">
+                        <strong className="block font-semibold">
+                          Cainiao-Sicherheitsüberprüfung aktiv (Captcha)
+                        </strong>
+                        <span className="text-amber-900/90 dark:text-amber-300/80 text-xs">
+                          {selected.error}
+                          {selected.data
+                            ? ' Angezeigt wird der letzte erfolgreiche Abruf.'
+                            : ''}
+                        </span>
+                      </div>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={openVerification}
+                      className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs gap-1.5 shadow-xs"
+                    >
+                      <ExternalLink size={14} />
+                      Verifizierung öffnen
+                    </Button>
+                  </div>
+                ) : (
+                  <output className="notice">
+                    Aktualisierung fehlgeschlagen: {selected.error}
+                    {selected.data
+                      ? ' Angezeigt wird der letzte erfolgreiche Abruf.'
+                      : ''}
+                  </output>
+                )
               )}
               <div
                 className="milestones"
@@ -1341,6 +1419,50 @@ export default function Home() {
           )}
         </section>
       </div>
+      {showVerifyModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in">
+          <div className="bg-card text-card-foreground border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3 text-amber-600 dark:text-amber-400">
+                <ShieldAlert size={28} className="shrink-0" />
+                <h3 className="text-lg font-bold">Cainiao-Verifizierung</h3>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                onClick={() => setShowVerifyModal(false)}
+                aria-label="Schließen"
+              >
+                <X size={18} />
+              </Button>
+            </div>
+            <p className="text-sm text-muted-foreground leading-relaxed">
+              Cainiao verlangt eine Sicherheitsüberprüfung (Schieberegler / Captcha), um aktuelle Tracking-Daten für deine Sendungen bereitzustellen.
+            </p>
+            <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg border border-border/50">
+              💡 Nach dem Klick öffnet sich das Verifizierungsfenster. Löse dort kurz das Captcha – deine Sitzungs-Cookies werden automatisch übernommen und deine Sendungen aktualisiert.
+            </p>
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowVerifyModal(false)}
+              >
+                Später
+              </Button>
+              <Button
+                className="bg-amber-600 hover:bg-amber-700 text-white font-medium gap-1.5 shadow-xs"
+                size="sm"
+                onClick={openVerification}
+              >
+                <ExternalLink size={15} />
+                Verifizierung öffnen
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
       <Toaster />
     </main>
   );
