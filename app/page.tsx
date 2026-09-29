@@ -337,6 +337,17 @@ export default function Home() {
     setBusy(true);
 
     try {
+      const dt = (
+        window as unknown as {
+          unterwegsDesktop?: { syncCookies?: () => Promise<unknown> };
+        }
+      )?.unterwegsDesktop;
+      if (dt?.syncCookies) {
+        await dt.syncCookies().catch(() => {});
+      }
+    } catch {}
+
+    try {
       const res = await fetch('/api/parcels/refresh', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1441,7 +1452,7 @@ export default function Home() {
               Cainiao verlangt eine Sicherheitsüberprüfung (Schieberegler / Captcha), um aktuelle Tracking-Daten für deine Sendungen bereitzustellen.
             </p>
             <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg border border-border/50">
-              💡 Nach dem Klick öffnet sich das Verifizierungsfenster. Löse dort kurz das Captcha – deine Sitzungs-Cookies werden automatisch übernommen und deine Sendungen aktualisiert.
+              💡 Nach dem Klick öffnet sich das Verifizierungsfenster. Löse dort kurz den Schieberegler. Falls &apos;Oops... something&apos;s wrong&apos; erscheint, drücke einfach <strong>F5</strong> (oder Menü &rarr; Seite neu laden), um den Regler frisch zu laden. Deine Sitzung wird automatisch übernommen.
             </p>
             <div className="flex items-center justify-end gap-2 pt-2">
               <Button

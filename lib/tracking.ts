@@ -101,6 +101,25 @@ export function formatDateDe(t: number | string): string {
 // In-memory cache for Cainiao requests (15 min TTL)
 const cainiaoCache = new Map<string, { at: number; data: TrackingData }>();
 
+declare global {
+  // eslint-disable-next-line no-var
+  var __unterwegsCainiaoCookie: string | undefined;
+}
+
+export function setCainiaoCookie(cookie: string | null) {
+  globalThis.__unterwegsCainiaoCookie = cookie || undefined;
+  if (cookie) {
+    cainiaoCache.clear();
+  }
+}
+
+export function getCainiaoCookie(): string | null {
+  if (globalThis.__unterwegsCainiaoCookie) {
+    return globalThis.__unterwegsCainiaoCookie;
+  }
+  return getCainiaoCookieHeader();
+}
+
 function getCainiaoCookieHeader(): string | null {
   const possiblePaths = [
     path.join(
@@ -279,13 +298,17 @@ export async function fetchCainiaoBatch(
   const url = `https://global.cainiao.com/global/detail.json?mailNos=${encodeURIComponent(toFetch.join(','))}&lang=en-US`;
   const headers: Record<string, string> = {
     'User-Agent':
-      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
     Accept: 'application/json, text/plain, */*',
-    'Accept-Language': 'en-US,en;q=0.9,de;q=0.8',
+    'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
     Referer: 'https://global.cainiao.com/',
+    'Sec-Ch-Ua':
+      '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
+    'Sec-Ch-Ua-Mobile': '?0',
+    'Sec-Ch-Ua-Platform': '"Linux"',
   };
 
-  const cookie = getCainiaoCookieHeader();
+  const cookie = getCainiaoCookie();
   if (cookie) {
     headers['Cookie'] = cookie;
   }

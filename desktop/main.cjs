@@ -22,6 +22,11 @@ if (IS_SMOKE_TEST) {
   if (!process.env.UNTERWEGS_DATA_DIR || !process.env.UNTERWEGS_PORT) throw new Error('Smoke test requires isolated data directory and port');
   app.setPath('userData', path.join(process.env.UNTERWEGS_DATA_DIR, 'electron-test'));
 }
+
+app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
+
+const CHROME_USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
 const SERVER_PORT = Number(process.env.UNTERWEGS_PORT || 4317);
 const SERVER_HOST = app.isPackaged ? '127.0.0.1' : 'localhost';
 const SERVER_URL = `http://${SERVER_HOST}:${SERVER_PORT}`;
@@ -271,6 +276,12 @@ async function fetchTrackerParcels() {
 }
 
 async function triggerServerRefresh() {
+  try {
+    const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+    if (fs.existsSync(cookieFile)) {
+      await syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+    }
+  } catch {}
   return new Promise((resolve) => {
     const req = http.request(
       {
@@ -305,19 +316,90 @@ function openCainiaoVerificationWindow(summary) {
   const cainiaoUrl = `https://global.cainiao.com/newDetail.htm?mailNoList=${encodeURIComponent(queryList)}`;
 
   const verifyWin = new BrowserWindow({
-    width: 960,
-    height: 720,
+    width: 980,
+    height: 740,
     title: 'Cainiao Global Tracking & Verifizierung',
     icon: ICON_PATH,
+    autoHideMenuBar: false,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
 
-  void verifyWin.loadURL(cainiaoUrl);
+  verifyWin.webContents.setUserAgent(CHROME_USER_AGENT);
+
+  const verifyMenu = Menu.buildFromTemplate([
+    {
+      label: 'Aktionen',
+      submenu: [
+        {
+          label: 'Seite neu laden (F5)',
+          accelerator: 'F5',
+          click: () => verifyWin.reload(),
+        },
+        {
+          label: 'Seite neu laden (Strg+R)',
+          accelerator: 'CmdOrCtrl+R',
+          click: () => verifyWin.reload(),
+        },
+        {
+          label: 'Cache leeren & Neu laden',
+          accelerator: 'CmdOrCtrl+Shift+R',
+          click: async () => {
+            try {
+              await verifyWin.webContents.session.clearCache();
+            } catch {}
+            verifyWin.reload();
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Cookies & Cache zurücksetzen',
+          click: async () => {
+            try {
+              await verifyWin.webContents.session.clearStorageData();
+              const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+              const jsonFile = path.join(DATA_DIR, 'cainiao_cookies.json');
+              if (fs.existsSync(cookieFile)) fs.unlinkSync(cookieFile);
+              if (fs.existsSync(jsonFile)) fs.unlinkSync(jsonFile);
+            } catch {}
+            void verifyWin.loadURL(cainiaoUrl);
+          },
+        },
+        { type: 'separator' },
+        {
+          label: 'Fenster schließen',
+          accelerator: 'CmdOrCtrl+W',
+          click: () => verifyWin.close(),
+        },
+      ],
+    },
+  ]);
+  verifyWin.setMenu(verifyMenu);
 
   const ses = verifyWin.webContents.session;
+
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    details.requestHeaders['User-Agent'] = CHROME_USER_AGENT;
+    details.requestHeaders['Sec-Ch-Ua'] =
+      '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"';
+    details.requestHeaders['Sec-Ch-Ua-Mobile'] = '?0';
+    details.requestHeaders['Sec-Ch-Ua-Platform'] = '"Linux"';
+    callback({ cancel: false, requestHeaders: details.requestHeaders });
+  });
+
+  verifyWin.webContents.on('dom-ready', () => {
+    verifyWin.webContents
+      .executeJavaScript(`
+        try {
+          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        } catch {}
+      `)
+      .catch(() => {});
+  });
+
+  void verifyWin.loadURL(cainiaoUrl);
   ses.cookies.on('changed', async (event, cookie, cause, removed) => {
     if (
       !removed &&
@@ -348,6 +430,7 @@ function openCainiaoVerificationWindow(summary) {
           cookieStr,
           'utf-8',
         );
+        void syncCookiesToServer(cookieStr);
         console.log('[Desktop] Captured Cainiao cookie:', cookie.name);
       } catch (err) {
         console.error('[Desktop] Failed to save cookie:', err);
@@ -356,6 +439,12 @@ function openCainiaoVerificationWindow(summary) {
   });
 
   verifyWin.on('closed', async () => {
+    try {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      if (fs.existsSync(cookieFile)) {
+        await syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+      }
+    } catch {}
     await triggerServerRefresh();
     const updated = await fetchTrackerSummary();
     updateTrayMenu(updated);
@@ -369,11 +458,50 @@ function openCainiaoVerificationWindow(summary) {
   });
 }
 
+async function syncCookiesToServer(cookieStr) {
+  if (!cookieStr) return;
+  return new Promise((resolve) => {
+    const payload = JSON.stringify({ cookie: cookieStr });
+    const req = http.request(
+      {
+        host: SERVER_HOST,
+        port: SERVER_PORT,
+        path: '/api/cainiao/cookies',
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+        timeout: 5000,
+      },
+      (res) => {
+        res.resume();
+        resolve(res.statusCode === 200);
+      },
+    );
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve(false));
+    req.write(payload);
+    req.end();
+  });
+}
+
 // IPC handler to allow renderer UI to trigger verification window directly
 ipcMain.handle('unterwegs:open-verify', async () => {
   const summary = await fetchTrackerSummary();
   openCainiaoVerificationWindow(summary);
   return { success: true };
+});
+
+ipcMain.handle('unterwegs:sync-cookies', async () => {
+  try {
+    const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+    if (fs.existsSync(cookieFile)) {
+      const ok = await syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+      return { success: ok };
+    }
+  } catch {}
+  return { success: false };
 });
 
 function updateTrayMenu(summary) {
@@ -606,6 +734,14 @@ async function createWindow() {
     }
   });
 
+  // Sync cookies to server if available
+  try {
+    const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+    if (fs.existsSync(cookieFile)) {
+      void syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+    }
+  } catch {}
+
   // Load the web app
   void mainWindow.webContents.loadURL(SERVER_URL);
 
@@ -654,6 +790,14 @@ void app.whenReady().then(async () => {
   createTray();
   try { await createWindow(); }
   catch (error) { dialog.showErrorBox('Unterwegs konnte nicht starten', error.message); app.quit(); return; }
+
+  // Sync existing cookies to server
+  try {
+    const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+    if (fs.existsSync(cookieFile)) {
+      void syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+    }
+  } catch {}
 
   if (process.argv.includes('--verify')) {
     void fetchTrackerSummary().then((s) => openCainiaoVerificationWindow(s));

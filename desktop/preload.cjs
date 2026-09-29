@@ -6,5 +6,6 @@ contextBridge.exposeInMainWorld('unterwegsDesktop', {
   platform: process.platform,
   version: '1.0.0',
   openVerifyWindow: () => ipcRenderer.invoke('unterwegs:open-verify'),
+  syncCookies: () => ipcRenderer.invoke('unterwegs:sync-cookies'),
 });
 
