@@ -8,6 +8,16 @@ import {
 } from 'react';
 import Link from 'next/link';
 import {
+  groupParcels,
+  carrierTracking,
+  trackingNumbers,
+} from '@/lib/shipments';
+import type {
+  Parcel,
+  TrackingData as Data,
+  TrackingEvent as Event,
+} from '@/lib/tracking';
+import {
   Package,
   ArrowUpRight,
   RefreshCw,
@@ -31,67 +41,7 @@ import {
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 
-type Event = { time: number; description: string; code: string };
-type Data = {
-  number: string;
-  internationalNumber?: string;
-  origin: string;
-  destination: string;
-  status: string;
-  carrier: string;
-  checkedAt: string;
-  events: Event[];
-};
-type Parcel = {
-  number: string;
-  name: string;
-  note: string;
-  data?: Data;
-  error?: string;
-};
-
-const defaults: Parcel[] = [
-  {
-    number: '3070000000000019',
-    name: 'AliExpress Paket #1',
-    note: 'Sendung 3070000000000019',
-  },
-  {
-    number: '3070000000000018',
-    name: 'AliExpress Paket #2',
-    note: 'Sendung 3070000000000018',
-  },
-  {
-    number: '3070000000000021',
-    name: 'AliExpress Paket #3',
-    note: 'Sendung 3070000000000021',
-  },
-  {
-    number: '3070000000000022',
-    name: 'AliExpress Paket #4',
-    note: 'Sendung 3070000000000022',
-  },
-  {
-    number: '3070000000000023',
-    name: 'AliExpress Paket #5',
-    note: 'Sendung 3070000000000023',
-  },
-  {
-    number: '3070000000000024',
-    name: 'AliExpress Paket #6',
-    note: 'Sendung 3070000000000024',
-  },
-  {
-    number: '3070000000000017',
-    name: 'AliExpress Paket #7',
-    note: 'Sendung 3070000000000017',
-  },
-  {
-    number: '3070000000000020',
-    name: 'AliExpress Paket #8',
-    note: 'Sendung 3070000000000020',
-  },
-];
+const defaults: Parcel[] = [];
 
 const words: Record<string, string> = {
   ORDER_PROCESSING: 'Bestellung wird vorbereitet',
@@ -126,7 +76,7 @@ function label(e?: Event) {
 function delivered(p: Parcel) {
   return (
     p.data?.status === 'DELIVERED' ||
-    p.data?.events?.[0]?.code === 'GTMS_SIGNED'
+    ['GTMS_SIGNED', 'SIGN_SUCCESS'].includes(p.data?.events?.[0]?.code || '')
   );
 }
 
@@ -167,7 +117,7 @@ export default function Home() {
     getIsDesktopSnapshot,
     getServerIsDesktopSnapshot,
   );
-  const [expanded, setExpanded] = useState<string | null>(defaults[0].number);
+  const [expanded, setExpanded] = useState<string | null>(null);
   const lock = useRef(false);
   const parcelsRef = useRef(parcels);
   useEffect(() => {
@@ -181,7 +131,7 @@ export default function Home() {
         const res = await fetch('/api/parcels');
         if (res.ok) {
           const json = (await res.json()) as { parcels?: Parcel[] };
-          if (Array.isArray(json.parcels) && json.parcels.length > 0) {
+          if (Array.isArray(json.parcels) && json.parcels.length >= 0) {
             setParcels(json.parcels);
             setReady(true);
             return;
@@ -211,6 +161,32 @@ export default function Home() {
     }
 
     void loadInitial();
+  }, []);
+
+  useEffect(() => {
+    const selectFromHash = () => {
+      const value = new URLSearchParams(window.location.hash.slice(1)).get(
+        'shipment',
+      );
+      if (value) setExpanded(value);
+    };
+    selectFromHash();
+    window.addEventListener('hashchange', selectFromHash);
+    const timer = window.setInterval(async () => {
+      if (lock.current) return;
+      try {
+        const res = await fetch('/api/parcels');
+        const json = (await res.json()) as { parcels?: Parcel[] };
+        if (res.ok && Array.isArray(json.parcels) && !lock.current)
+          setParcels(json.parcels);
+      } catch {
+        /* Existing data stays visible while offline. */
+      }
+    }, 30000);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener('hashchange', selectFromHash);
+    };
   }, []);
 
   // Keep localStorage in sync as a local backup
@@ -444,9 +420,15 @@ export default function Home() {
     return () => lifecycle.abort();
   }, [parcels, refresh]);
 
-  const active = parcels.filter((p) => !delivered(p)).length;
-
-  const selected = parcels.find((p) => p.number === expanded) || parcels[0];
+  const shipments = groupParcels(parcels);
+  const active = shipments.filter((p) => !delivered(p)).length;
+  const selected =
+    shipments.find(
+      (p) =>
+        p.id === expanded ||
+        p.items.some((i) => trackingNumbers(i).includes(expanded || '')),
+    ) || shipments[0];
+  const carrier = selected ? carrierTracking(selected) : null;
   const latest = selected?.data?.events?.[0];
   const country = (value?: string) =>
     value === 'Mainland China'
@@ -481,15 +463,11 @@ export default function Home() {
       ),
     },
     {
-      name: 'An DHL übergeben',
+      name: carrier ? `An ${carrier.name} übergeben` : 'An Zusteller übergeben',
       icon: Truck,
       confirmed: events.some((e) => {
-        const isDhl =
-          /dhl/i.test(selected?.data?.carrier || '') ||
-          (selected?.number || '').startsWith('0034') ||
-          (selected?.data?.internationalNumber || '').startsWith('0034');
-        const explicitDhlHandover =
-          /(?:received|accepted|collected) by dhl|(?:handed over|delivered) to dhl|an dhl übergeben|von dhl (?:übernommen|bearbeitet)/i.test(
+        const explicitHandover =
+          /(?:received|accepted|collected) by (?:dhl|dpd)|(?:handed over|delivered) to (?:dhl|dpd)|an (?:dhl|dpd) übergeben|von (?:dhl|dpd) (?:übernommen|bearbeitet)/i.test(
             e.description,
           );
         const localHandover =
@@ -497,12 +475,9 @@ export default function Home() {
             e.description,
           );
         return (
-          explicitDhlHandover ||
-          (isDhl &&
-            (localHandover ||
-              ['GTMS_DELIVERING', 'GTMS_SIGNED', 'SIGN_SUCCESS'].includes(
-                e.code,
-              )))
+          explicitHandover ||
+          localHandover ||
+          ['GTMS_DELIVERING', 'GTMS_SIGNED', 'SIGN_SUCCESS'].includes(e.code)
         );
       }),
     },
@@ -611,37 +586,33 @@ export default function Home() {
           </Button>
         </form>
       )}
-      {message && (
-        <output className="app-message">
-          {message}
-        </output>
-      )}
+      {message && <output className="app-message">{message}</output>}
       <div className="split-layout">
         <aside className="shipment-sidebar" aria-label="Deine Pakete">
           <div className="sidebar-heading">
             <div>
               <h1>Deine Pakete</h1>
               <p>
-                {active} unterwegs <span>·</span> {parcels.length - active}{' '}
-                angekommen
+                {active} unterwegs <span>·</span> {shipments.length - active}{' '}
+                angekommen · {parcels.length} Artikel
               </p>
             </div>
-            <span className="parcel-count">{parcels.length}</span>
+            <span className="parcel-count">{shipments.length}</span>
           </div>
           <nav
             className="shipment-list"
             aria-label="Paket auswählen"
             aria-busy={busy}
           >
-            {parcels.map((p) => {
+            {shipments.map((p) => {
               const e = p.data?.events?.[0],
-                chosen = selected?.number === p.number;
+                chosen = selected?.id === p.id;
               return (
                 <button
-                  key={p.number}
+                  key={p.id}
                   className={'shipment-row ' + (chosen ? 'selected' : '')}
                   aria-current={chosen ? 'true' : undefined}
-                  onClick={() => setExpanded(p.number)}
+                  onClick={() => setExpanded(p.id)}
                 >
                   <span
                     className={'row-icon ' + (delivered(p) ? 'arrived' : '')}
@@ -651,13 +622,21 @@ export default function Home() {
                   <span className="row-copy">
                     <strong>{p.name}</strong>
                     <span className={p.error ? 'row-error' : ''}>
-                      {p.error
-                        ? 'Abruf fehlgeschlagen'
-                        : e
-                          ? label(e)
-                          : 'Noch kein Versandstatus'}
+                      {e ? label(e) : 'Noch kein Versandstatus'}
                     </span>
-                    <time>{e ? date(e.time) : 'Warte auf Trackingdaten'}</time>
+                    {p.items.length > 1 && (
+                      <span>{p.items.map((i) => i.name).join(', ')}</span>
+                    )}
+                    <time>
+                      {p.data?.checkedAt
+                        ? `Geprüft: ${date(p.data.checkedAt)}`
+                        : 'Noch nicht erfolgreich geprüft'}
+                    </time>
+                    {p.error && (
+                      <span className="row-error">
+                        Aktualisierung fehlgeschlagen
+                      </span>
+                    )}
                   </span>
                   <ChevronRight size={16} className="row-arrow" />
                 </button>
@@ -696,7 +675,8 @@ export default function Home() {
                 <div>
                   <p className="detail-kicker">SENDUNGSDETAILS</p>
                   <h2>{selected.name}</h2>
-                  {selected.note &&
+                  {selected.items.length === 1 &&
+                    selected.note &&
                     !/^(Sendung |AliExpress Ref:|Über KI hinzugefügt)/.test(
                       selected.note,
                     ) && <p className="detail-note">{selected.note}</p>}
@@ -714,13 +694,18 @@ export default function Home() {
                     <MoreHorizontal size={20} />
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
-                    <DropdownMenuItem
-                      variant="destructive"
-                      onClick={() => removeParcel(selected.number)}
-                    >
-                      <Trash2 size={16} />
-                      Paket entfernen
-                    </DropdownMenuItem>
+                    {selected.items.map((item) => (
+                      <DropdownMenuItem
+                        key={item.number}
+                        variant="destructive"
+                        onClick={() => removeParcel(item.number)}
+                      >
+                        <Trash2 size={16} />
+                        {selected.items.length > 1
+                          ? `${item.name} entfernen`
+                          : 'Paket entfernen'}
+                      </DropdownMenuItem>
+                    ))}
                   </DropdownMenuContent>
                 </DropdownMenu>
               </header>
@@ -751,9 +736,43 @@ export default function Home() {
                   <span>{country(selected.data?.destination)}</span>
                 </div>
               </div>
+              <output className="tracking-freshness">
+                {selected.data?.checkedAt
+                  ? `Zuletzt erfolgreich geprüft: ${date(selected.data.checkedAt)}`
+                  : 'Noch kein erfolgreicher Tracking-Abruf'}
+                {selected.error && selected.lastAttemptAt && (
+                  <span>Letzter Versuch: {date(selected.lastAttemptAt)}</span>
+                )}
+              </output>
+              {selected.items.length > 1 && (
+                <section
+                  className="shipment-articles"
+                  aria-label="Artikel in diesem Paket"
+                >
+                  <h3>{selected.items.length} Artikel in einer Sendung</h3>
+                  <ul>
+                    {selected.items.map((item) => (
+                      <li key={item.number}>
+                        <strong>{item.name}</strong>
+                        {item.number.startsWith('307') ? (
+                          <a
+                            href={`https://www.aliexpress.com/p/order/detail.html?orderId=${encodeURIComponent(item.number)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                          >
+                            Bestellung ansehen <ArrowUpRight size={14} />
+                          </a>
+                        ) : (
+                          <span>{item.number}</span>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
               {selected.error && (
                 <output className="notice">
-                  {selected.error}
+                  Aktualisierung fehlgeschlagen: {selected.error}
                   {selected.data
                     ? ' Angezeigt wird der letzte erfolgreiche Abruf.'
                     : ''}
@@ -812,34 +831,65 @@ export default function Home() {
                 <aside className="package-facts">
                   <h3>Paketinformationen</h3>
                   <dl>
-                    <dt>Sendungsnummer / Referenz</dt>
-                    <dd>{selected.number}</dd>
-                    {selected.data?.internationalNumber &&
-                      selected.data.internationalNumber !== selected.number && (
+                    <dt>Sendungsnummer</dt>
+                    <dd>{selected.id}</dd>
+                    {selected.items.length === 1 &&
+                      selected.id !== selected.number && (
                         <>
-                          <dt>Internationale Nummer</dt>
-                          <dd>{selected.data.internationalNumber}</dd>
+                          <dt>Ursprüngliche Nummer / Bestellreferenz</dt>
+                          <dd>{selected.number}</dd>
                         </>
                       )}
+                    {selected.data?.previousNumbers?.filter(
+                      (n) => n !== selected.id && !n.startsWith('307'),
+                    ).length ? (
+                      <>
+                        <dt>Frühere Trackingnummern</dt>
+                        <dd>
+                          {selected.data.previousNumbers
+                            .filter(
+                              (n) => n !== selected.id && !n.startsWith('307'),
+                            )
+                            .join(' · ')}
+                        </dd>
+                      </>
+                    ) : null}
                     <dt>Letzter erfolgreicher Abruf</dt>
                     <dd>
-                      {selected.data
+                      {selected.data?.checkedAt
                         ? date(selected.data.checkedAt)
                         : 'Noch nicht verfügbar'}
+                    </dd>
+                    <dt>Zusteller</dt>
+                    <dd>
+                      {carrier
+                        ? `${carrier.name}${carrier.inferred ? ' (anhand der Nummer)' : ''}`
+                        : 'Noch nicht bekannt'}
                     </dd>
                     <dt>Datenquelle</dt>
                     <dd>Cainiao</dd>
                   </dl>
                   <div className="tracking-links">
-                    {selected.number.startsWith('307') && (
+                    {carrier && (
                       <a
-                        href={`https://www.aliexpress.com/p/order/detail.html?orderId=${encodeURIComponent(selected.number)}`}
+                        className="carrier-link"
+                        href={carrier.url}
                         target="_blank"
                         rel="noopener noreferrer"
                       >
-                        AliExpress <ArrowUpRight size={15} />
+                        Bei {carrier.name} verfolgen <ArrowUpRight size={15} />
                       </a>
                     )}
+                    {selected.items.length === 1 &&
+                      selected.number.startsWith('307') && (
+                        <a
+                          href={`https://www.aliexpress.com/p/order/detail.html?orderId=${encodeURIComponent(selected.number)}`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                        >
+                          AliExpress <ArrowUpRight size={15} />
+                        </a>
+                      )}
                     <a
                       href={`https://global.cainiao.com/newDetail.htm?mailNoList=${encodeURIComponent(selected.data?.internationalNumber || selected.number)}`}
                       target="_blank"

@@ -824,3 +824,47 @@ a:focus-visible {
     transition: none !important;
   }
 }
+
+.tracking-freshness {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin: 14px 0;
+  color: #526173;
+  font-size: 12px;
+}
+.shipment-articles {
+  margin: 18px 0;
+  padding: 16px;
+  border: 1px solid #dde5e9;
+  border-radius: 12px;
+  background: #f8fafb;
+}
+.shipment-articles h3 {
+  margin: 0 0 10px;
+  font-size: 13px;
+}
+.shipment-articles ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.shipment-articles li {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 0;
+  font-size: 12px;
+}
+.shipment-articles a {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #087d70;
+}
+.tracking-links .carrier-link {
+  background: #e8f5f0;
+  color: #086858;
+  font-weight: 600;
+}

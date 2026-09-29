@@ -9,6 +9,8 @@ export async function GET() {
 
   return Response.json({
     totalCount: summary.totalCount,
+    articleCount: summary.articleCount,
+    shipments: summary.shipments,
     activeCount: summary.activeCount,
     deliveredCount: summary.deliveredCount,
     parcels: summary.items,

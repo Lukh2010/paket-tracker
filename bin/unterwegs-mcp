@@ -21,7 +21,7 @@ SERVER_BASE_URLS = [
     "http://localhost:4317",
 ]
 
-DATA_DIR = os.path.expanduser("~/.local/share/unterwegs")
+DATA_DIR = os.environ.get("UNTERWEGS_DATA_DIR") or os.path.join(os.environ.get("XDG_DATA_HOME", os.path.expanduser("~/.local/share")), "unterwegs")
 DATA_FILE = os.path.join(DATA_DIR, "parcels.json")
 
 server = MCPServer("unterwegs-aliexpress-tracker")
@@ -54,12 +54,7 @@ def _load_local_store() -> List[Dict[str, Any]]:
                 return json.load(f)
         except Exception:
             pass
-    return [
-        {"number": "00340000000000000004", "name": "G3 Max · Hinterradmotor", "note": "850 W · AliExpress"},
-        {"number": "00340000000000000003", "name": "Motorrad-Lenkerteil · 22 mm", "note": "AliExpress"},
-        {"number": "AP00000000000025", "name": "Gashebel & Kleinteile", "note": "2 × WUXING"},
-        {"number": "00340000000000000005", "name": "Motorrad-Lenkerteil · 22 mm", "note": "AliExpress"},
-    ]
+    return []
 
 
 def _save_local_store(parcels: List[Dict[str, Any]]):

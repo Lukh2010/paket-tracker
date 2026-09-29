@@ -12,7 +12,11 @@
     "build": "vinext build",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
-    "format": "oxfmt"
+    "format": "oxfmt",
+    "test": "node --test tests/*.cjs",
+    "typecheck": "tsc --noEmit --incremental false",
+    "desktop": "electron desktop/main.cjs",
+    "dev:local": "vinext dev --host localhost --port 4317"
   },
   "dependencies": {
     "react": "19.2.6",

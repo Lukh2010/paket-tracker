@@ -1,10 +1,15 @@
+import {
+  groupParcels,
+  trackingNumbers,
+  trackingQueryNumber,
+} from './shipments';
 import fs from 'node:fs';
 import path from 'node:path';
 import { Parcel, fetchCainiaoTracking, fetchCainiaoBatch } from './tracking';
 
 declare const __UNTERWEGS_PARCEL_BOOTSTRAP__: Parcel[];
 
-const DATA_DIR = '/home/example/.local/bin/paket-tracker/data';
+const DATA_DIR = path.resolve(process.env.UNTERWEGS_DATA_DIR || 'data');
 const DATA_FILE = path.join(DATA_DIR, 'parcels.json');
 
 function makeInitialTracking(
@@ -16,7 +21,7 @@ function makeInitialTracking(
     destination: 'Deutschland',
     status: 'ORDER_PROCESSING',
     carrier: 'Cainiao',
-    checkedAt: new Date().toISOString(),
+    checkedAt: '',
     events: [
       {
         time: Date.now(),
@@ -28,56 +33,7 @@ function makeInitialTracking(
   };
 }
 
-const DEFAULT_PARCELS: Parcel[] = [
-  {
-    number: '3070000000000019',
-    name: 'AliExpress Paket #1',
-    note: 'Sendung 3070000000000019',
-    data: makeInitialTracking('3070000000000019'),
-  },
-  {
-    number: '3070000000000018',
-    name: 'AliExpress Paket #2',
-    note: 'Sendung 3070000000000018',
-    data: makeInitialTracking('3070000000000018'),
-  },
-  {
-    number: '3070000000000021',
-    name: 'AliExpress Paket #3',
-    note: 'Sendung 3070000000000021',
-    data: makeInitialTracking('3070000000000021'),
-  },
-  {
-    number: '3070000000000022',
-    name: 'AliExpress Paket #4',
-    note: 'Sendung 3070000000000022',
-    data: makeInitialTracking('3070000000000022'),
-  },
-  {
-    number: '3070000000000023',
-    name: 'AliExpress Paket #5',
-    note: 'Sendung 3070000000000023',
-    data: makeInitialTracking('3070000000000023'),
-  },
-  {
-    number: '3070000000000024',
-    name: 'AliExpress Paket #6',
-    note: 'Sendung 3070000000000024',
-    data: makeInitialTracking('3070000000000024'),
-  },
-  {
-    number: '3070000000000017',
-    name: 'AliExpress Paket #7',
-    note: 'Sendung 3070000000000017',
-    data: makeInitialTracking('3070000000000017'),
-  },
-  {
-    number: '3070000000000020',
-    name: 'AliExpress Paket #8',
-    note: 'Sendung 3070000000000020',
-    data: makeInitialTracking('3070000000000020'),
-  },
-];
+const DEFAULT_PARCELS: Parcel[] = [];
 
 // In-memory module storage that persists across requests in the server runtime
 class ParcelStore {
@@ -109,7 +65,7 @@ class ParcelStore {
       try {
         const raw = fs.readFileSync(DATA_FILE, 'utf-8');
         const list = JSON.parse(raw);
-        if (Array.isArray(list) && list.length > 0) {
+        if (Array.isArray(list)) {
           for (const p of list) {
             if (p && p.number) {
               const trackingData =
@@ -181,6 +137,7 @@ class ParcelStore {
       note: data.note?.trim() || 'Hinzugefügt',
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      lastAttemptAt: new Date().toISOString(),
     };
 
     // Try fetching immediate tracking
@@ -218,10 +175,21 @@ class ParcelStore {
     existing.data = {
       ...currentData,
       ...data,
+      previousNumbers: [
+        ...new Set([
+          ...trackingNumbers(existing),
+          ...(data.previousNumbers || []),
+        ]),
+      ],
       internationalNumber:
         internationalNumber || currentData.internationalNumber,
-      checkedAt: new Date().toISOString(),
+      checkedAt:
+        data.checkedAt ||
+        (data.events?.length
+          ? new Date().toISOString()
+          : currentData.checkedAt),
     };
+    existing.lastAttemptAt = new Date().toISOString();
     existing.updatedAt = new Date().toISOString();
     existing.error = undefined;
     this.parcels.set(cleanNumber, existing);
@@ -242,41 +210,47 @@ class ParcelStore {
 
     try {
       const targets = number
-        ? ([this.parcels.get(number.trim().toUpperCase())].filter(
-            Boolean,
-          ) as Parcel[])
-        : Array.from(this.parcels.values());
+        ? groupParcels(this.getAll()).find((g) =>
+            g.items.some((p) => p.number === number.trim().toUpperCase()),
+          )?.items || []
+        : this.getAll();
+      const attemptedAt = new Date().toISOString();
 
       if (targets.length === 0) {
         return { updated: 0, errors };
       }
 
-      const numbers = targets.map(
-        (t) => t.number.startsWith('307') ? t.data?.internationalNumber || t.number : t.number,
-      );
+      const numbers = targets.map(trackingQueryNumber);
       try {
         const batchResults = await fetchCainiaoBatch(numbers, true);
         for (const p of targets) {
-          const freshData = batchResults.get(
-            p.number.startsWith('307') ? p.data?.internationalNumber || p.number : p.number,
-          );
+          const freshData = batchResults.get(trackingQueryNumber(p));
           if (freshData) {
             this.parcels.set(p.number, {
               ...p,
               data: {
                 ...freshData,
+                previousNumbers: [
+                  ...new Set([
+                    ...trackingNumbers(p),
+                    ...(freshData.previousNumbers || []),
+                  ]),
+                ],
                 number: p.number,
                 internationalNumber:
-                  p.data?.internationalNumber || freshData.internationalNumber,
+                  freshData.internationalNumber || p.data?.internationalNumber,
               },
               error: undefined,
+              lastAttemptAt: attemptedAt,
               updatedAt: new Date().toISOString(),
             });
             updated++;
           } else {
+            errors[p.number] = 'Noch keine Trackingdaten verfügbar';
             this.parcels.set(p.number, {
               ...p,
-              error: p.data ? undefined : 'Noch keine Trackingdaten verfügbar',
+              error: 'Noch keine Trackingdaten verfügbar',
+              lastAttemptAt: attemptedAt,
               updatedAt: new Date().toISOString(),
             });
           }
@@ -287,7 +261,8 @@ class ParcelStore {
           errors[p.number] = errMsg;
           this.parcels.set(p.number, {
             ...p,
-            error: p.data ? undefined : errMsg,
+            error: errMsg,
+            lastAttemptAt: attemptedAt,
             updatedAt: new Date().toISOString(),
           });
         }

@@ -1,5 +1,7 @@
+import { groupParcels, carrierTracking } from './shipments';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
 
 export type TrackingEvent = {
   time: number;
@@ -11,6 +13,7 @@ export type TrackingEvent = {
 export type TrackingData = {
   number: string;
   internationalNumber?: string;
+  previousNumbers?: string[];
   origin: string;
   destination: string;
   status: string;
@@ -27,6 +30,7 @@ export type Parcel = {
   error?: string;
   createdAt?: string;
   updatedAt?: string;
+  lastAttemptAt?: string;
 };
 
 export type CainiaoItem = {
@@ -96,13 +100,11 @@ const cainiaoCache = new Map<string, { at: number; data: TrackingData }>();
 function getCainiaoCookieHeader(): string | null {
   const possiblePaths = [
     path.join(
-      process.env.HOME || '/home/example',
-      '.local/share/unterwegs',
+      process.env.UNTERWEGS_DATA_DIR || path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'unterwegs'),
       'cainiao_cookies.json',
     ),
     path.join(
-      process.env.HOME || '/home/example',
-      '.local/share/unterwegs',
+      process.env.UNTERWEGS_DATA_DIR || path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'unterwegs'),
       'cookies.txt',
     ),
     path.join(process.cwd(), 'data', 'cookies.txt'),
@@ -116,7 +118,9 @@ function getCainiaoCookieHeader(): string | null {
           const parsed = JSON.parse(raw);
           if (Array.isArray(parsed)) {
             return parsed
-              .map((c: { name: string; value: string }) => `${c.name}=${c.value}`)
+              .map(
+                (c: { name: string; value: string }) => `${c.name}=${c.value}`,
+              )
               .join('; ');
           }
         }
@@ -294,6 +298,8 @@ export async function fetchCainiaoTracking(
 }
 
 export function buildAiSummary(parcels: Parcel[]) {
+  const shipments = groupParcels(parcels);
+  const activeShipments = shipments.filter((p) => !isDelivered(p));
   const activeParcels = parcels.filter((p) => !isDelivered(p));
   const deliveredParcels = parcels.filter((p) => isDelivered(p));
 
@@ -314,6 +320,7 @@ export function buildAiSummary(parcels: Parcel[]) {
     return {
       number: p.number,
       internationalNumber: p.data?.internationalNumber,
+      previousNumbers: p.data?.previousNumbers,
       name: p.name,
       note: p.note,
       isDelivered: delivered,
@@ -325,18 +332,20 @@ export function buildAiSummary(parcels: Parcel[]) {
       latestEventDescription: latestEvent?.description,
       checkedAt: p.data?.checkedAt,
       error: p.error,
+      lastAttemptAt: p.lastAttemptAt,
+      carrierTracking: carrierTracking(p),
     };
   });
 
   const lines: string[] = [
     `📦 **AliExpress / Cainiao Paketübersicht**`,
-    `Gesamt: ${parcels.length} Pakete (${activeParcels.length} unterwegs, ${deliveredParcels.length} angekommen)`,
+    `Gesamt: ${shipments.length} Pakete mit ${parcels.length} Artikeln (${activeShipments.length} unterwegs, ${shipments.length - activeShipments.length} angekommen)`,
     '',
   ];
 
   if (activeParcels.length > 0) {
     lines.push('### 🚀 Unterwegs:');
-    for (const p of activeParcels) {
+    for (const p of activeShipments) {
       const e = p.data?.events?.[0];
       const lbl = formatStatusLabel(e);
       const time = e?.time ? formatDateDe(e.time) : '';
@@ -345,30 +354,57 @@ export function buildAiSummary(parcels: Parcel[]) {
       );
       lines.push(`  - Status: **${lbl}** ${time ? `(${time})` : ''}`);
       if (p.note) lines.push(`  - Notiz: ${p.note}`);
-      if (p.error && !p.data) lines.push(`  - ⚠️ Hinweis: ${p.error}`);
+      lines.push(
+        `  - Letzter erfolgreicher Abruf: ${p.data?.checkedAt ? formatDateDe(p.data.checkedAt) : 'Noch nicht verfügbar'}`,
+      );
+      if (p.items.length > 1)
+        lines.push(`  - Artikel: ${p.items.map((i) => i.name).join(', ')}`);
+      if (p.error)
+        lines.push(`  - ⚠️ Aktualisierung fehlgeschlagen: ${p.error}`);
     }
     lines.push('');
   }
 
   if (deliveredParcels.length > 0) {
     lines.push('### ✅ Zugestellt:');
-    for (const p of deliveredParcels) {
+    for (const p of shipments.filter(isDelivered)) {
       const e = p.data?.events?.[0];
       const time = e?.time ? formatDateDe(e.time) : '';
       lines.push(
         `- **${p.name}** (\`${p.number}\`): Zugestellt ${time ? `am ${time}` : ''}`,
       );
+      lines.push(
+        `  - Letzter erfolgreicher Abruf: ${p.data?.checkedAt ? formatDateDe(p.data.checkedAt) : 'Noch nicht verfügbar'}`,
+      );
+      if (p.error)
+        lines.push(`  - ⚠️ Aktualisierung fehlgeschlagen: ${p.error}`);
     }
     lines.push('');
   }
 
-  lines.push(`_Stand: ${formatDateDe(Date.now())} · Quelle: Cainiao_`);
+  lines.push(
+    '_Quelle: Cainiao · Prüfzeiten stehen bei den jeweiligen Paketen._',
+  );
 
   return {
     markdownSummary: lines.join('\n'),
-    totalCount: parcels.length,
-    activeCount: activeParcels.length,
-    deliveredCount: deliveredParcels.length,
+    totalCount: shipments.length,
+    articleCount: parcels.length,
+    activeCount: activeShipments.length,
+    deliveredCount: shipments.length - activeShipments.length,
+    shipments: shipments.map((p) => ({
+      id: p.id,
+      name: p.name,
+      numbers: p.items.map((i) => i.number),
+      articleNames: p.items.map((i) => i.name),
+      status: isDelivered(p)
+        ? 'Zugestellt'
+        : formatStatusLabel(p.data?.events?.[0]),
+      checkedAt: p.data?.checkedAt,
+      error: p.error,
+      event: p.data?.events?.[0],
+      carrierTracking: carrierTracking(p),
+    })),
     items: itemsSummary,
   };
 }

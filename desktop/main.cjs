@@ -6,20 +6,76 @@ const {
   Menu,
   nativeImage,
   Notification,
+  shell,
 } = require('electron');
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
 const { spawn } = require('child_process');
+const { collectChanges } = require('./notifications.cjs');
 
 const PROJECT_DIR = path.resolve(__dirname, '..');
 const ICON_PATH = path.join(__dirname, 'assets', 'icon.png');
 const TRAY_ICON_PATH = path.join(__dirname, 'assets', 'tray.png');
-const DATA_DIR = path.join(
-  process.env.HOME || '/home/example',
-  '.local/share/unterwegs',
+const DATA_DIR = process.env.UNTERWEGS_DATA_DIR || path.join(
+  process.env.XDG_DATA_HOME || path.join(require('os').homedir(), '.local/share'),
+  'unterwegs',
 );
 const DATA_FILE = path.join(DATA_DIR, 'parcels.json');
+
+const NOTIFICATION_FILE = path.join(DATA_DIR, 'notifications.json');
+let notificationState = {};
+let notificationSettings = { enabled: true, quietHours: false };
+try {
+  const saved = JSON.parse(fs.readFileSync(NOTIFICATION_FILE, 'utf8'));
+  notificationState = saved.state || {};
+  notificationSettings = { ...notificationSettings, ...saved.settings };
+} catch {
+  /* First launch starts with a silent baseline. */
+}
+function saveNotificationState() {
+  try {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    fs.writeFileSync(
+      NOTIFICATION_FILE + '.tmp',
+      JSON.stringify({
+        state: notificationState,
+        settings: notificationSettings,
+      }),
+    );
+    fs.renameSync(NOTIFICATION_FILE + '.tmp', NOTIFICATION_FILE);
+  } catch (err) {
+    console.error('[Notifications] State could not be saved:', err.message);
+  }
+}
+function notifyChanges(summary) {
+  if (!Array.isArray(summary?.shipments)) return;
+  const hour = new Date().getHours();
+  const result = collectChanges(summary.shipments, notificationState, {
+    enabled: notificationSettings.enabled,
+    quiet: notificationSettings.quietHours && (hour >= 22 || hour < 8),
+  });
+  notificationState = result.state;
+  saveNotificationState();
+  if (!Notification.isSupported()) return;
+  for (const shipment of result.changes) {
+    const notification = new Notification({
+      title: shipment.name,
+      body: shipment.status,
+      icon: ICON_PATH,
+    });
+    notification.on('click', () => {
+      if (!mainWindow) return;
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+      void mainWindow.loadURL(
+        'http://localhost:4317/#shipment=' + encodeURIComponent(shipment.id),
+      );
+    });
+    notification.show();
+  }
+}
 
 let mainWindow = null;
 let tray = null;
@@ -99,7 +155,7 @@ async function ensureServerRunning() {
 
   console.log('[Desktop] Starting background tracker server on port 4317...');
   const vinextBin = path.join(PROJECT_DIR, 'node_modules', '.bin', 'vinext');
-  const nodeBin = fs.existsSync('/usr/bin/node26') ? '/usr/bin/node26' : 'node';
+  const nodeBin = process.env.UNTERWEGS_NODE || 'node';
 
   spawnedServer = spawn(
     nodeBin,
@@ -151,6 +207,7 @@ async function fetchTrackerSummary() {
         });
       },
     );
+    req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
     req.end();
   });
@@ -178,6 +235,7 @@ async function fetchTrackerParcels() {
         });
       },
     );
+    req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
     req.end();
   });
@@ -191,7 +249,7 @@ async function triggerServerRefresh() {
         port: 4317,
         path: '/api/parcels/refresh',
         method: 'POST',
-        timeout: 10000,
+        timeout: 30000,
       },
       (res) => {
         let body = '';
@@ -205,6 +263,7 @@ async function triggerServerRefresh() {
         });
       },
     );
+    req.on('timeout', () => req.destroy());
     req.on('error', () => resolve(null));
     req.end();
   });
@@ -213,7 +272,7 @@ async function triggerServerRefresh() {
 function openCainiaoVerificationWindow(summary) {
   const items = summary && Array.isArray(summary.items) ? summary.items : [];
   const numbers = items.map((i) => i.number).filter(Boolean);
-  const queryList = numbers.length ? numbers.join(',') : '3070000000000019';
+  const queryList = numbers.length ? numbers.join(',') : '';
   const cainiaoUrl = `https://global.cainiao.com/newDetail.htm?mailNoList=${encodeURIComponent(queryList)}`;
 
   const verifyWin = new BrowserWindow({
@@ -231,14 +290,27 @@ function openCainiaoVerificationWindow(summary) {
 
   const ses = verifyWin.webContents.session;
   ses.cookies.on('changed', async (event, cookie, cause, removed) => {
-    if (!removed && (cookie.domain.includes('cainiao.com') || cookie.name.includes('x5sec'))) {
+    if (
+      !removed &&
+      (cookie.domain.includes('cainiao.com') || cookie.name.includes('x5sec'))
+    ) {
       try {
         const allCookies = await ses.cookies.get({ domain: '.cainiao.com' });
         const cookieFile = path.join(DATA_DIR, 'cainiao_cookies.json');
         fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(cookieFile, JSON.stringify(allCookies, null, 2), 'utf-8');
-        const cookieStr = allCookies.map((c) => `${c.name}=${c.value}`).join('; ');
-        fs.writeFileSync(path.join(DATA_DIR, 'cookies.txt'), cookieStr, 'utf-8');
+        fs.writeFileSync(
+          cookieFile,
+          JSON.stringify(allCookies, null, 2),
+          'utf-8',
+        );
+        const cookieStr = allCookies
+          .map((c) => `${c.name}=${c.value}`)
+          .join('; ');
+        fs.writeFileSync(
+          path.join(DATA_DIR, 'cookies.txt'),
+          cookieStr,
+          'utf-8',
+        );
         console.log('[Desktop] Captured Cainiao cookie:', cookie.name);
       } catch (err) {
         console.error('[Desktop] Failed to save cookie:', err);
@@ -256,13 +328,14 @@ function openCainiaoVerificationWindow(summary) {
 
 function updateTrayMenu(summary) {
   if (!tray) return;
+  notifyChanges(summary);
 
   const active = summary ? summary.activeCount : '?';
   const delivered = summary ? summary.deliveredCount : '?';
   const total = summary ? summary.totalCount : '?';
 
   tray.setToolTip(
-    `Unterwegs · ${active} unterwegs, ${delivered} angekommen (Gesamt: ${total})`,
+    `Unterwegs · ${active} unterwegs, ${delivered} angekommen (Gesamt: ${total} Pakete · ${summary?.articleCount ?? total} Artikel)`,
   );
 
   // Persist backup summary and parcels to local JSON file
@@ -324,6 +397,25 @@ function updateTrayMenu(summary) {
     },
     { type: 'separator' },
     {
+      label: 'Benachrichtigungen bei Statusänderungen',
+      type: 'checkbox',
+      checked: notificationSettings.enabled,
+      click: (item) => {
+        notificationSettings.enabled = item.checked;
+        saveNotificationState();
+      },
+    },
+    {
+      label: 'Ruhezeit 22–08 Uhr',
+      type: 'checkbox',
+      checked: notificationSettings.quietHours,
+      click: (item) => {
+        notificationSettings.quietHours = item.checked;
+        saveNotificationState();
+      },
+    },
+    { type: 'separator' },
+    {
       label: 'Im Hintergrund minimieren',
       click: () => {
         if (mainWindow) mainWindow.hide();
@@ -365,6 +457,25 @@ function createTray() {
     const summary = await fetchTrackerSummary();
     if (summary) updateTrayMenu(summary);
   }, 30000);
+
+  // Keep status notifications useful while the window is hidden.
+  let checkingTracking = false;
+  setInterval(
+    async () => {
+      if (checkingTracking) return;
+      checkingTracking = true;
+      try {
+        const summary = await fetchTrackerSummary();
+        if (summary?.activeCount > 0) {
+          await triggerServerRefresh();
+          updateTrayMenu(await fetchTrackerSummary());
+        }
+      } finally {
+        checkingTracking = false;
+      }
+    },
+    30 * 60 * 1000,
+  );
 }
 
 async function createWindow() {
@@ -387,6 +498,22 @@ async function createWindow() {
   });
 
   mainWindow.setMenuBarVisibility(false);
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    const target = new URL(url);
+    if (
+      target.protocol === 'https:' &&
+      [
+        'www.dhl.de',
+        'www.dpdgroup.com',
+        'www.aliexpress.com',
+        'global.cainiao.com',
+        't.17track.net',
+      ].includes(target.hostname)
+    ) {
+      void shell.openExternal(url);
+    }
+    return { action: 'deny' };
+  });
 
   // Load the web app
   mainWindow.loadURL('http://localhost:4317');
@@ -429,7 +556,6 @@ app.whenReady().then(() => {
   if (process.argv.includes('--verify')) {
     void fetchTrackerSummary().then((s) => openCainiaoVerificationWindow(s));
   }
-
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

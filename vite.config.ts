@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { sites } from '@openai/sites-vite-plugin';
 import tailwindcss from '@tailwindcss/postcss';
 import vinext from 'vinext';
@@ -35,7 +37,7 @@ const localBindingConfig = {
     : [],
 };
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
   // Keep Wrangler and Miniflare state project-local. These are non-secret tool
   // settings; application environment belongs in ignored `.env*` files.
   process.env.WRANGLER_WRITE_LOGS ??= 'false';
@@ -48,9 +50,17 @@ export default defineConfig(async () => {
   // workerd cannot read the host filesystem; load the desktop backup in Vite's
   // Node process so restarting the local service preserves the parcel list.
   let parcelBootstrap = [];
+  const backup = path.join(process.env.UNTERWEGS_DATA_DIR || path.join(process.env.XDG_DATA_HOME || path.join(os.homedir(), '.local/share'), 'unterwegs'), 'parcels.json');
   try {
+    // Release builds must never embed the developer's private parcel data.
+    if (command !== 'serve') throw new Error('No private bootstrap in builds');
     const saved = JSON.parse(
-      fs.readFileSync(new URL('./data/parcels.json', import.meta.url), 'utf8'),
+      fs.readFileSync(
+        fs.existsSync(backup)
+          ? backup
+          : new URL('./data/parcels.json', import.meta.url),
+        'utf8',
+      ),
     );
     if (Array.isArray(saved)) parcelBootstrap = saved;
   } catch {

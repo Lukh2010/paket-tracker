@@ -1,19 +1,19 @@
 import { parcelStore } from '@/lib/store';
-import { isDelivered } from '@/lib/tracking';
+import { buildAiSummary } from '@/lib/tracking';
 
 export const dynamic = 'force-dynamic';
 
 export async function GET() {
   const parcels = parcelStore.getAll();
-  const activeCount = parcels.filter((p) => !isDelivered(p)).length;
-  const deliveredCount = parcels.filter((p) => isDelivered(p)).length;
+  const summary = buildAiSummary(parcels);
 
   return Response.json(
     {
       parcels,
-      totalCount: parcels.length,
-      activeCount,
-      deliveredCount,
+      totalCount: summary.totalCount,
+      articleCount: summary.articleCount,
+      activeCount: summary.activeCount,
+      deliveredCount: summary.deliveredCount,
     },
     {
       headers: {

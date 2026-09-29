@@ -3,29 +3,30 @@
 # unterwegs: CLI & Desktop App launcher for the AliExpress / Cainiao Package Tracker
 #
 
-PROJECT_DIR="/home/example/.local/bin/paket-tracker"
+set -o pipefail
+PROJECT_DIR="$(cd -- "$(dirname -- "$(readlink -f -- "${BASH_SOURCE[0]}")")/.." && pwd)"
 DESKTOP_MAIN="$PROJECT_DIR/desktop/main.cjs"
-ELECTRON_BIN="/usr/bin/electron"
+ELECTRON_BIN="${UNTERWEGS_ELECTRON:-electron}"
 API_URL="http://localhost:4317"
 
 case "$1" in
   status)
-    curl -s -g "$API_URL/api/ai/summary" | jq -r '.markdownSummary // .error // "Tracker nicht erreichbar."'
-    exit 0
+    curl --fail --show-error --silent -g "$API_URL/api/ai/summary" | jq -r '.markdownSummary // .error // "Tracker nicht erreichbar."'
+    exit $?
     ;;
   refresh)
     echo "Aktualisiere Sendungsdaten von Cainiao..."
-    res=$(curl -s -g -X POST "$API_URL/api/parcels/refresh")
+    res=$(curl --fail --show-error --silent -g -X POST "$API_URL/api/parcels/refresh")
     echo "$res" | jq -r 'if .success then "\(.updated) Pakete erfolgreich aktualisiert." else .error end'
-    exit 0
+    exit $?
     ;;
   track)
     if [ -z "$2" ]; then
       echo "Nutzung: unterwegs track <SENDUNGSNUMMER>"
       exit 1
     fi
-    curl -s -g "$API_URL/api/track?number=$2" | jq .
-    exit 0
+    curl --fail --show-error --silent -g "$API_URL/api/track?number=$2" | jq .
+    exit $?
     ;;
   add)
     if [ -z "$2" ]; then
@@ -36,15 +37,15 @@ case "$1" in
     name="${3:-Neues Paket}"
     note="${4:-Über CLI hinzugefügt}"
     payload=$(jq -n --arg num "$number" --arg n "$name" --arg nt "$note" '{number: $num, name: $n, note: $nt}')
-    curl -s -g -X POST "$API_URL/api/ai/parcels" -H "Content-Type: application/json" -d "$payload" | jq .
-    exit 0
+    curl --fail --show-error --silent -g -X POST "$API_URL/api/ai/parcels" -H "Content-Type: application/json" -d "$payload" | jq .
+    exit $?
     ;;
   verify)
-    exec "$ELECTRON_BIN" "$DESKTOP_MAIN" --verify >/dev/null 2>&1 &
-    exit 0
+    exec "$ELECTRON_BIN" "$DESKTOP_MAIN" --verify
+    exit $?
     ;;
   mcp)
-    exec /home/example/.local/bin/unterwegs-mcp
+    exec "$PROJECT_DIR/bin/unterwegs-mcp"
     ;;
   help|--help|-h)
     echo "Unterwegs · AliExpress Package Tracker CLI & Desktop"
@@ -58,10 +59,10 @@ case "$1" in
     echo "  unterwegs add <NR> [NAME] Fügt ein neues Paket hinzu"
     echo "  unterwegs verify          Öffnet das Cainiao-Verifizierungsfenster (Captcha lösen)"
     echo "  unterwegs mcp             Startet den MCP-Server (für AI/LLMs)"
-    exit 0
+    exit $?
     ;;
   *)
     # Default: Launch or activate Desktop App
-    exec "$ELECTRON_BIN" "$DESKTOP_MAIN" "$@" >/dev/null 2>&1 &
+    exec "$ELECTRON_BIN" "$DESKTOP_MAIN" "$@"
     ;;
 esac

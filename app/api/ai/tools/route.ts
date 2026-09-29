@@ -40,7 +40,7 @@ export async function GET() {
             tracking_number: {
               type: 'string',
               description:
-                'Die Sendungsnummer (z. B. 00340000000000000004 oder AP00000000000025)',
+                'Die Sendungsnummer (z. B. 0034… oder AP…)',
             },
           },
           required: ['tracking_number'],

@@ -38,3 +38,9 @@ tsconfig.tsbuildinfo
 data/cookies.txt
 data/cainiao_cookies.json
 data/
+
+# local Python environment and backups
+.venv/
+__pycache__/
+*.pyc
+*.bak
