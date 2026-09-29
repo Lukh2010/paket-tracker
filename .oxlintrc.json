@@ -31,7 +31,9 @@
     "coverage/**",
     "next-env.d.ts",
     "components/ui/**",
-    "hooks/use-mobile.ts"
+    "hooks/use-mobile.ts",
+    "desktop-stage/**",
+    "release/**"
   ],
   "rules": {
     "no-array-constructor": "error",
@@ -54,5 +56,13 @@
     "typescript/no-require-imports": "error",
     "typescript/no-unnecessary-type-constraint": "error",
     "typescript/no-unsafe-function-type": "error"
-  }
+  },
+  "overrides": [
+    {
+      "files": ["tests/**"],
+      "rules": {
+        "typescript/no-floating-promises": "off"
+      }
+    }
+  ]
 }

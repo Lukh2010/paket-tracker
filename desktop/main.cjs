@@ -7,6 +7,8 @@ const {
   nativeImage,
   Notification,
   shell,
+  utilityProcess,
+  dialog,
 } = require('electron');
 const path = require('path');
 const http = require('http');
@@ -14,6 +16,14 @@ const fs = require('fs');
 const { spawn } = require('child_process');
 const { collectChanges } = require('./notifications.cjs');
 
+const IS_SMOKE_TEST = process.argv.includes('--smoke-test');
+if (IS_SMOKE_TEST) {
+  if (!process.env.UNTERWEGS_DATA_DIR || !process.env.UNTERWEGS_PORT) throw new Error('Smoke test requires isolated data directory and port');
+  app.setPath('userData', path.join(process.env.UNTERWEGS_DATA_DIR, 'electron-test'));
+}
+const SERVER_PORT = Number(process.env.UNTERWEGS_PORT || 4317);
+const SERVER_HOST = app.isPackaged ? '127.0.0.1' : 'localhost';
+const SERVER_URL = `http://${SERVER_HOST}:${SERVER_PORT}`;
 const PROJECT_DIR = path.resolve(__dirname, '..');
 const ICON_PATH = path.join(__dirname, 'assets', 'icon.png');
 const TRAY_ICON_PATH = path.join(__dirname, 'assets', 'tray.png');
@@ -70,7 +80,7 @@ function notifyChanges(summary) {
       mainWindow.show();
       mainWindow.focus();
       void mainWindow.loadURL(
-        'http://localhost:4317/#shipment=' + encodeURIComponent(shipment.id),
+        SERVER_URL + '/#shipment=' + encodeURIComponent(shipment.id),
       );
     });
     notification.show();
@@ -108,12 +118,12 @@ app.on('second-instance', (event, commandLine) => {
   }
 });
 
-function checkServerReady(port = 4317) {
+function checkServerReady(port = SERVER_PORT) {
   return new Promise((resolve) => {
     // Try both IPv6 and IPv4
     const req = http.request(
       {
-        host: 'localhost',
+        host: SERVER_HOST,
         port: port,
         path: '/api/ai/summary',
         method: 'GET',
@@ -123,6 +133,7 @@ function checkServerReady(port = 4317) {
         resolve(res.statusCode >= 200 && res.statusCode < 500);
       },
     );
+    req.on('timeout', () => req.destroy());
     req.on('error', () => {
       // Try ::1
       const req6 = http.request(
@@ -137,6 +148,7 @@ function checkServerReady(port = 4317) {
           resolve(res6.statusCode >= 200 && res6.statusCode < 500);
         },
       );
+      req6.on('timeout', () => req6.destroy());
       req6.on('error', () => resolve(false));
       req6.end();
     });
@@ -145,27 +157,31 @@ function checkServerReady(port = 4317) {
 }
 
 async function ensureServerRunning() {
-  const isUp = await checkServerReady(4317);
+  const isUp = await checkServerReady();
   if (isUp) {
     console.log(
-      '[Desktop] Background tracker server is already running on port 4317.',
+      `[Desktop] Background tracker server is already running on port ${SERVER_PORT}.`,
     );
     return;
   }
 
-  console.log('[Desktop] Starting background tracker server on port 4317...');
-  const vinextBin = path.join(PROJECT_DIR, 'node_modules', '.bin', 'vinext');
-  const nodeBin = process.env.UNTERWEGS_NODE || 'node';
-
-  spawnedServer = spawn(
-    nodeBin,
-    [vinextBin, 'dev', '--host', '127.0.0.1', '--port', '4317'],
-    {
-      cwd: PROJECT_DIR,
-      env: { ...process.env, PORT: '4317' },
-      stdio: ['ignore', 'pipe', 'pipe'],
-    },
-  );
+  console.log(`[Desktop] Starting background tracker server on port ${SERVER_PORT}...`);
+  if (app.isPackaged) {
+    const runtimeDir = path.join(process.resourcesPath, 'runtime');
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+    spawnedServer = utilityProcess.fork(path.join(__dirname, 'server.cjs'), [], {
+      cwd: runtimeDir,
+      env: { ...process.env, NODE_ENV: 'production', HOST: SERVER_HOST, PORT: String(SERVER_PORT), UNTERWEGS_DATA_DIR: DATA_DIR, UNTERWEGS_RUNTIME_DIR: runtimeDir },
+      stdio: 'pipe',
+      serviceName: 'Unterwegs Paketserver',
+    });
+  } else {
+    const vinextBin = path.join(PROJECT_DIR, 'node_modules', '.bin', 'vinext');
+    spawnedServer = spawn(process.env.UNTERWEGS_NODE || 'node',
+      [vinextBin, 'dev', '--host', 'localhost', '--port', String(SERVER_PORT)],
+      { cwd: PROJECT_DIR, env: { ...process.env, PORT: String(SERVER_PORT) }, stdio: ['ignore', 'pipe', 'pipe'] });
+  }
+  spawnedServer.on('error', (error) => console.error('[Server]', error));
 
   spawnedServer.stdout.on('data', (d) => process.stdout.write(`[Server] ${d}`));
   spawnedServer.stderr.on('data', (d) => process.stderr.write(`[Server] ${d}`));
@@ -178,19 +194,20 @@ async function ensureServerRunning() {
   // Wait for server to become ready
   for (let i = 0; i < 40; i++) {
     await new Promise((r) => setTimeout(r, 500));
-    if (await checkServerReady(4317)) {
+    if (await checkServerReady()) {
       console.log('[Desktop] Server is ready!');
       return;
     }
   }
+  throw new Error('Der lokale Paketserver konnte nicht gestartet werden.');
 }
 
 async function fetchTrackerSummary() {
   return new Promise((resolve) => {
     const req = http.request(
       {
-        host: 'localhost',
-        port: 4317,
+        host: SERVER_HOST,
+        port: SERVER_PORT,
         path: '/api/ai/summary',
         method: 'GET',
         timeout: 3000,
@@ -217,8 +234,8 @@ async function fetchTrackerParcels() {
   return new Promise((resolve) => {
     const req = http.request(
       {
-        host: 'localhost',
-        port: 4317,
+        host: SERVER_HOST,
+        port: SERVER_PORT,
         path: '/api/parcels',
         method: 'GET',
         timeout: 3000,
@@ -245,8 +262,8 @@ async function triggerServerRefresh() {
   return new Promise((resolve) => {
     const req = http.request(
       {
-        host: 'localhost',
-        port: 4317,
+        host: SERVER_HOST,
+        port: SERVER_PORT,
         path: '/api/parcels/refresh',
         method: 'POST',
         timeout: 30000,
@@ -286,7 +303,7 @@ function openCainiaoVerificationWindow(summary) {
     },
   });
 
-  verifyWin.loadURL(cainiaoUrl);
+  void verifyWin.loadURL(cainiaoUrl);
 
   const ses = verifyWin.webContents.session;
   ses.cookies.on('changed', async (event, cookie, cause, removed) => {
@@ -350,7 +367,7 @@ function updateTrayMenu(summary) {
     } catch {}
 
     void fetchTrackerParcels().then((pData) => {
-      if (pData && Array.isArray(pData.parcels)) {
+      if (!app.isPackaged && pData && Array.isArray(pData.parcels)) {
         try {
           fs.writeFileSync(
             DATA_FILE,
@@ -516,7 +533,7 @@ async function createWindow() {
   });
 
   // Load the web app
-  mainWindow.loadURL('http://localhost:4317');
+  void mainWindow.loadURL(SERVER_URL);
 
   mainWindow.once('ready-to-show', () => {
     if (!isBackgroundStart) {
@@ -549,9 +566,20 @@ async function createWindow() {
   updateTrayMenu(initialSummary);
 }
 
-app.whenReady().then(() => {
+void app.whenReady().then(async () => {
+  if (IS_SMOKE_TEST) {
+    let exitCode = 0;
+    try {
+      if (await checkServerReady()) throw new Error('Smoke-test port is already in use');
+      await ensureServerRunning();
+      await require('./smoke.cjs').run(SERVER_URL, DATA_DIR, process.argv.includes('--smoke-restart'));
+    } catch (error) { console.error(error); exitCode = 1; }
+    finally { if (spawnedServer) spawnedServer.kill(); app.exit(exitCode); }
+    return;
+  }
   createTray();
-  void createWindow();
+  try { await createWindow(); }
+  catch (error) { dialog.showErrorBox('Unterwegs konnte nicht starten', error.message); app.quit(); return; }
 
   if (process.argv.includes('--verify')) {
     void fetchTrackerSummary().then((s) => openCainiaoVerificationWindow(s));
@@ -571,7 +599,7 @@ app.on('before-quit', () => {
   isQuitting = true;
   if (spawnedServer) {
     try {
-      spawnedServer.kill('SIGTERM');
+      spawnedServer.kill();
     } catch {}
   }
 });

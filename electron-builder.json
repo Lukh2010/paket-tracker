@@ -1,0 +1,19 @@
+{
+  "appId": "io.github.Lukh2010.unterwegs",
+  "productName": "Unterwegs",
+  "directories": { "app": "desktop-stage", "output": "release" },
+  "files": ["desktop/**/*", "package.json", "LICENSE"],
+  "extraResources": [
+    { "from": "dist/standalone", "to": "runtime", "filter": ["**/*", "!node_modules"] },
+    { "from": "dist/standalone/node_modules", "to": "runtime/node_modules" }
+  ],
+  "asar": true,
+  "npmRebuild": false,
+  "linux": {
+    "target": [{ "target": "AppImage", "arch": ["x64"] }],
+    "category": "Utility",
+    "icon": "desktop/assets/icon-512.png",
+    "artifactName": "Unterwegs-${version}-linux-${arch}.${ext}",
+    "desktop": { "entry": { "Comment": "Lokaler Paket-Tracker für AliExpress und Cainiao" } }
+  }
+}

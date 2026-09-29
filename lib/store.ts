@@ -47,11 +47,13 @@ class ParcelStore {
 
   private persist() {
     try {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
       fs.writeFileSync(
-        DATA_FILE,
+        DATA_FILE + '.tmp',
         JSON.stringify(Array.from(this.parcels.values()), null, 2),
         'utf-8',
       );
+      fs.renameSync(DATA_FILE + '.tmp', DATA_FILE);
     } catch {
       // In sandboxed worker runtimes (workerd), host filesystem writes are restricted.
       // In-memory state remains fully active and is backed up by desktop companion / MCP.

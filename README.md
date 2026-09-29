@@ -11,9 +11,25 @@ Lokaler Paket-Tracker für AliExpress und Cainiao mit deutscher Oberfläche und 
 - Aktualisierung alle 30 Minuten, solange die Desktop-App läuft und aktive Sendungen vorhanden sind.
 - Lokale REST-Schnittstellen, CLI und optionaler MCP-Server.
 
-## Installation aus dem Quellcode (Linux)
+## Installation & Nutzung (Linux)
 
-Dieser Stand ist eine Quellinstallation. Es gibt noch keinen mit diesem Stand geprüften AppImage-Installer. Die Desktop-App verwendet einen lokalen Entwicklungsserver. Getestete Desktop-Umgebung: KDE unter Linux; andere Systeme sind nicht verifiziert.
+### Option 1: AppImage (empfohlen)
+
+Jeder GitHub-Commit und jedes Release erzeugt über GitHub Actions automatisch ein fertiges, portables Linux-AppImage mit integriertem Node-Server und Desktop-Client:
+
+1. Lade `Unterwegs-*.AppImage` aus den GitHub Releases oder Actions Artifacts herunter.
+2. Mache die Datei ausführbar:
+   ```bash
+   chmod +x Unterwegs-*.AppImage
+   ```
+3. Starte das AppImage per Doppelklick oder im Terminal:
+   ```bash
+   ./Unterwegs-*.AppImage
+   ```
+
+### Option 2: Installation aus dem Quellcode
+
+Die Quellinstallation verwendet den lokalen Entwicklungsserver. Getestete Desktop-Umgebung: KDE unter Linux.
 
 Voraussetzungen: Git, **Node.js 22.13 oder neuer**, npm sowie ein separat installiertes **Electron** mit dem Befehl `electron` im Suchpfad. Die CLI-Abfragen benötigen zusätzlich `curl` und `jq`. Die Linux-Paketnamen unterscheiden sich je nach Distribution.
 
@@ -101,6 +117,8 @@ npm test
 npm run typecheck
 npm run lint
 npm run build
+npm run build:appimage
+npm run test:appimage
 ```
 
 GitHub Actions prüft diese Schritte automatisch. Lint prüft den Anwendungscode; die unveränderten generierten UI-Bausteine unter `components/ui` und deren `hooks/use-mobile.ts` sind ausgenommen, da deren Vorlage eigene Regelverstöße enthält. Der Typecheck erfasst auch diese Bausteine. Tests verwenden temporäre Daten und keine echten Trackingabfragen. Der Build enthält keine lokale Paketsicherung; `npm start` startet eine lokale Vorschau des Worker-Builds, keinen vollständig installierten Desktop-Dienst. Für den normalen Desktop-Betrieb die oben beschriebene Quellinstallation verwenden.
