@@ -17,7 +17,7 @@ Lokaler Paket-Tracker für AliExpress und Cainiao mit deutscher Oberfläche und 
 
 Jeder GitHub-Commit und jedes Release erzeugt über GitHub Actions automatisch ein fertiges, portables Linux-AppImage mit integriertem Node-Server und Desktop-Client:
 
-1. Lade `Unterwegs-*.AppImage` aus den GitHub Releases oder Actions Artifacts herunter.
+1. Lade `Unterwegs-*.AppImage` aus den [GitHub Releases](https://github.com/Lukh2010/paket-tracker/releases/latest) herunter.
 2. Mache die Datei ausführbar:
    ```bash
    chmod +x Unterwegs-*.AppImage
