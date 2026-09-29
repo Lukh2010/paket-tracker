@@ -47,3 +47,7 @@ __pycache__/
 
 /desktop-stage/
 /release/
+/.agents/
+PROJECT.md
+TEST_INFRA.md
+TEST_READY.md

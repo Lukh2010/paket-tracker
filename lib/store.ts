@@ -1,4 +1,5 @@
 import {
+  carrierTracking,
   groupParcels,
   trackingNumbers,
   trackingQueryNumber,
@@ -120,17 +121,19 @@ class ParcelStore {
     name: string;
     note?: string;
   }): Promise<Parcel> {
-    let cleanNumber = data.number.trim().toUpperCase().replace(/\s/g, '');
-    if (
-      cleanNumber.length % 2 === 0 &&
-      cleanNumber.slice(0, cleanNumber.length / 2) ===
-        cleanNumber.slice(cleanNumber.length / 2)
-    ) {
-      cleanNumber = cleanNumber.slice(0, cleanNumber.length / 2);
-    }
+    if (!this.initialized) this.init();
+    const cleanNumber = data.number.trim().toUpperCase().replace(/\s/g, '');
 
     if (!/^[A-Z0-9]{8,40}$/.test(cleanNumber)) {
       throw new Error('Ungültige Sendungsnummer (8-40 Zeichen).');
+    }
+
+    // Bug 4: Comprehensive duplicate check across primary and all linked numbers
+    const isDuplicate = Array.from(this.parcels.values()).some((p) =>
+      trackingNumbers(p).includes(cleanNumber),
+    );
+    if (isDuplicate) {
+      throw new Error('Sendung ist bereits vorhanden.');
     }
 
     const parcel: Parcel = {
@@ -146,15 +149,65 @@ class ParcelStore {
     try {
       parcel.data = await fetchCainiaoTracking(cleanNumber);
     } catch (err: unknown) {
-      parcel.error =
-        err instanceof Error
-          ? err.message
-          : 'Konnte Trackingdaten nicht abrufen';
+      // Feature 8: Direct carrier fallback when Cainiao has no data for recognized domestic carriers
+      const carrierInfo = carrierTracking(cleanNumber);
+      if (carrierInfo) {
+        parcel.data = {
+          number: cleanNumber,
+          origin: 'Deutschland',
+          destination: 'Deutschland',
+          status: 'ORDER_PROCESSING',
+          carrier: carrierInfo.name,
+          checkedAt: new Date().toISOString(),
+          events: [
+            {
+              time: Date.now(),
+              description: `Sendung bei ${carrierInfo.name} registriert (Direktverfolgung)`,
+              code: 'ORDER_PROCESSING',
+            },
+          ],
+        };
+        parcel.error = undefined;
+      } else {
+        parcel.error =
+          err instanceof Error
+            ? err.message
+            : 'Konnte Trackingdaten nicht abrufen';
+      }
     }
 
     this.parcels.set(cleanNumber, parcel);
     this.persist();
     return parcel;
+  }
+
+  public updateParcelMeta(
+    number: string,
+    meta: { name?: string; note?: string },
+  ): Parcel | null {
+    if (!this.initialized) this.init();
+    const cleanNumber = number.trim().toUpperCase().replace(/\s/g, '');
+    let target = this.parcels.get(cleanNumber);
+    if (!target) {
+      for (const p of this.parcels.values()) {
+        if (trackingNumbers(p).includes(cleanNumber)) {
+          target = p;
+          break;
+        }
+      }
+    }
+    if (!target) return null;
+
+    if (meta.name !== undefined) {
+      target.name = meta.name.trim() || 'Neues Paket';
+    }
+    if (meta.note !== undefined) {
+      target.note = meta.note.trim();
+    }
+    target.updatedAt = new Date().toISOString();
+    this.parcels.set(target.number, target);
+    this.persist();
+    return target;
   }
 
   public remove(number: string): boolean {

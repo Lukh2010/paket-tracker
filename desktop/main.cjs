@@ -79,9 +79,20 @@ function notifyChanges(summary) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
       mainWindow.focus();
-      void mainWindow.loadURL(
-        SERVER_URL + '/#shipment=' + encodeURIComponent(shipment.id),
-      );
+      const parcel = shipment;
+      const targetId =
+        (parcel &&
+          (parcel.id ||
+            parcel.number ||
+            (Array.isArray(parcel.numbers) && parcel.numbers[0]))) ||
+        '';
+      if (targetId) {
+        const targetHash =
+          '#shipment=' + encodeURIComponent(targetId).replace(/'/g, '%27');
+        mainWindow.webContents
+          .executeJavaScript(`window.location.hash = '${targetHash}';`)
+          .catch(() => {});
+      }
     });
     notification.show();
   }
@@ -339,7 +350,13 @@ function openCainiaoVerificationWindow(summary) {
     await triggerServerRefresh();
     const updated = await fetchTrackerSummary();
     updateTrayMenu(updated);
-    if (mainWindow) mainWindow.reload();
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents
+        .executeJavaScript(
+          'window.dispatchEvent(new CustomEvent("unterwegs:refresh"));',
+        )
+        .catch(() => {});
+    }
   });
 }
 
@@ -402,7 +419,13 @@ function updateTrayMenu(summary) {
         await triggerServerRefresh();
         const updated = await fetchTrackerSummary();
         updateTrayMenu(updated);
-        if (mainWindow) mainWindow.reload();
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents
+            .executeJavaScript(
+              'window.dispatchEvent(new CustomEvent("unterwegs:refresh"));',
+            )
+            .catch(() => {});
+        }
       },
     },
 
@@ -495,6 +518,32 @@ function createTray() {
   );
 }
 
+const ALLOWED_EXTERNAL_DOMAINS = [
+  'dhl.de',
+  'dpd.de',
+  'dpdgroup.com',
+  'myhermes.de',
+  'gls-pakete.de',
+  'gls-group.com',
+  'ups.com',
+  'aliexpress.com',
+  'cainiao.com',
+  '17track.net',
+];
+
+function isAllowedExternalUrl(urlString) {
+  try {
+    const target = new URL(urlString);
+    if (target.protocol !== 'https:' && target.protocol !== 'http:') return false;
+    const hostname = target.hostname.toLowerCase();
+    return ALLOWED_EXTERNAL_DOMAINS.some(
+      (domain) => hostname === domain || hostname.endsWith('.' + domain),
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function createWindow() {
   await ensureServerRunning();
 
@@ -506,7 +555,7 @@ async function createWindow() {
     title: 'Unterwegs · AliExpress Tracker',
     icon: ICON_PATH,
     show: false, // Don't show until ready
-    backgroundColor: '#f4f6f8',
+    backgroundColor: '#18181b',
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -516,24 +565,33 @@ async function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    const target = new URL(url);
-    if (
-      target.protocol === 'https:' &&
-      [
-        'www.dhl.de',
-        'www.dpdgroup.com',
-        'www.aliexpress.com',
-        'global.cainiao.com',
-        't.17track.net',
-      ].includes(target.hostname)
-    ) {
+    // Whitelisted external carrier domains: dhl.de, dpd.de, myhermes.de, gls-pakete.de, ups.com
+    if (isAllowedExternalUrl(url)) {
       void shell.openExternal(url);
     }
     return { action: 'deny' };
   });
 
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    try {
+      const parsed = new URL(url);
+      if (
+        (parsed.hostname === 'localhost' ||
+          parsed.hostname === '127.0.0.1' ||
+          parsed.hostname === '::1') &&
+        Number(parsed.port) === SERVER_PORT
+      ) {
+        return;
+      }
+    } catch {}
+    event.preventDefault();
+    if (isAllowedExternalUrl(url)) {
+      void shell.openExternal(url);
+    }
+  });
+
   // Load the web app
-  void mainWindow.loadURL(SERVER_URL);
+  void mainWindow.webContents.loadURL(SERVER_URL);
 
   mainWindow.once('ready-to-show', () => {
     if (!isBackgroundStart) {
@@ -608,3 +666,10 @@ app.on('window-all-closed', (e) => {
   // Do NOT quit when all windows are closed; keep running in tray/background!
   e.preventDefault();
 });
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    ALLOWED_EXTERNAL_DOMAINS,
+    isAllowedExternalUrl,
+  };
+}

@@ -20,6 +20,7 @@ export type TrackingData = {
   carrier: string;
   checkedAt: string;
   events: TrackingEvent[];
+  estimatedDeliveryTime?: string | number;
 };
 
 export type Parcel = {
@@ -42,6 +43,9 @@ export type CainiaoItem = {
   destCpInfo?: { cpName?: string };
   latestTrace?: unknown;
   detailList?: Record<string, unknown>[];
+  estimatedDeliveryTime?: string | number;
+  promiseDeliveryTime?: string | number;
+  estimatedDeliveryTimeDesc?: string;
 };
 
 export const EVENT_CODES_DE: Record<string, string> = {
@@ -174,15 +178,72 @@ export function parseCainiaoItem(item: CainiaoItem): TrackingData {
         ? 'DELIVERING'
         : 'ORDER_PROCESSING';
 
+  // Feature 5: Parse estimated delivery time from fields or traces
+  let estimatedDeliveryTime: string | number | undefined =
+    item.estimatedDeliveryTime ||
+    item.promiseDeliveryTime ||
+    item.estimatedDeliveryTimeDesc;
+
+  if (!estimatedDeliveryTime && Array.isArray(item.detailList)) {
+    for (const d of item.detailList) {
+      const desc =
+        typeof d.standerdDesc === 'string'
+          ? d.standerdDesc
+          : typeof d.desc === 'string'
+            ? d.desc
+            : '';
+      const match = desc.match(
+        /(?:estimated delivery(?: time)?|voraussichtliche(?:r)? (?:liefer(?:termin|ung|zeit)|zustellung)|expected delivery|delivery by|zustellung voraussichtlich)[:\s]+([A-Za-z0-9,.\s\-:]+)/i,
+      );
+      if (match) {
+        estimatedDeliveryTime = match[1].trim();
+        break;
+      }
+    }
+  }
+
+  // Feature 8: Automatic DHL handover detection for Cainiao shipments to Germany
+  const isGermany =
+    item.destCountry === 'DE' ||
+    item.destCountry === 'Deutschland' ||
+    item.destCountry === 'Germany';
+
+  let carrier = item.destCpInfo?.cpName || 'Cainiao';
+  let internationalNumber = item.copyRealMailNo || undefined;
+
+  if (isGermany) {
+    if (internationalNumber?.startsWith('0034')) {
+      carrier = 'DHL';
+    } else {
+      for (const e of item.detailList || []) {
+        const desc =
+          typeof e.standerdDesc === 'string'
+            ? e.standerdDesc
+            : typeof e.desc === 'string'
+              ? e.desc
+              : '';
+        if (/dhl|deutsche post/i.test(desc)) {
+          carrier = 'DHL';
+          if (!internationalNumber) {
+            const m = desc.match(/\b(0034\d{16}|\d{10,20})\b/);
+            if (m) internationalNumber = m[1];
+          }
+          break;
+        }
+      }
+    }
+  }
+
   return {
     number: item.mailNo,
-    internationalNumber: item.copyRealMailNo || undefined,
+    internationalNumber,
     origin: item.originCountry || 'China',
     destination: item.destCountry || 'Deutschland',
     status,
-    carrier: item.destCpInfo?.cpName || 'Cainiao',
+    carrier,
     checkedAt: new Date().toISOString(),
     events: finalEvents,
+    estimatedDeliveryTime: estimatedDeliveryTime || undefined,
   };
 }
 
@@ -334,6 +395,7 @@ export function buildAiSummary(parcels: Parcel[]) {
       error: p.error,
       lastAttemptAt: p.lastAttemptAt,
       carrierTracking: carrierTracking(p),
+      estimatedDeliveryTime: p.data?.estimatedDeliveryTime,
     };
   });
 
@@ -354,6 +416,13 @@ export function buildAiSummary(parcels: Parcel[]) {
       );
       lines.push(`  - Status: **${lbl}** ${time ? `(${time})` : ''}`);
       if (p.note) lines.push(`  - Notiz: ${p.note}`);
+      if (p.data?.estimatedDeliveryTime) {
+        const etaStr =
+          typeof p.data.estimatedDeliveryTime === 'number'
+            ? formatDateDe(p.data.estimatedDeliveryTime)
+            : String(p.data.estimatedDeliveryTime);
+        lines.push(`  - Voraussichtliche Lieferung: ${etaStr}`);
+      }
       lines.push(
         `  - Letzter erfolgreicher Abruf: ${p.data?.checkedAt ? formatDateDe(p.data.checkedAt) : 'Noch nicht verfügbar'}`,
       );
@@ -404,6 +473,7 @@ export function buildAiSummary(parcels: Parcel[]) {
       error: p.error,
       event: p.data?.events?.[0],
       carrierTracking: carrierTracking(p),
+      estimatedDeliveryTime: p.data?.estimatedDeliveryTime,
     })),
     items: itemsSummary,
   };

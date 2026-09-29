@@ -72,9 +72,52 @@ export async function POST(request: Request) {
   } catch (err: unknown) {
     const message =
       err instanceof Error ? err.message : 'Fehler beim Hinzufügen des Pakets';
-    return Response.json({ error: message }, { status: 400 });
+    const status = message.includes('bereits vorhanden') ? 409 : 400;
+    return Response.json({ error: message }, { status });
   }
 }
+
+export async function PATCH(request: Request) {
+  try {
+    const body = (await request.json()) as {
+      number?: string;
+      name?: string;
+      note?: string;
+    };
+
+    if (
+      !body ||
+      !body.number ||
+      typeof body.number !== 'string' ||
+      !body.number.trim()
+    ) {
+      return Response.json(
+        { ok: false, error: 'Sendungsnummer erforderlich.' },
+        { status: 400 },
+      );
+    }
+
+    const updated = parcelStore.updateParcelMeta(body.number, {
+      name: body.name,
+      note: body.note,
+    });
+
+    if (!updated) {
+      return Response.json(
+        { ok: false, error: 'Paket nicht gefunden.' },
+        { status: 404 },
+      );
+    }
+
+    return Response.json({ ok: true, success: true, parcel: updated });
+  } catch (err: unknown) {
+    const message =
+      err instanceof Error ? err.message : 'Fehler beim Aktualisieren';
+    return Response.json({ ok: false, error: message }, { status: 400 });
+  }
+}
+
+export const PUT = PATCH;
 
 export async function DELETE(request: Request) {
   const url = new URL(request.url);
@@ -101,3 +144,4 @@ export async function DELETE(request: Request) {
 
   return Response.json({ success: true, message: `Paket ${number} gelöscht.` });
 }
+

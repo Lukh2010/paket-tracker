@@ -31,6 +31,12 @@ import {
   Truck,
   MapPin,
   Sparkles,
+  Sun,
+  Moon,
+  Laptop,
+  Pencil,
+  Calendar,
+  ArrowLeft,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -40,6 +46,21 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
+import { toast as baseToast, Toaster } from '@/components/ui/toast';
+import { useIsMobile } from '@/hooks/use-mobile';
+
+type ThemeMode = 'system' | 'light' | 'dark';
+
+interface ToastOptions {
+  title?: React.ReactNode;
+  description?: React.ReactNode;
+  type?: 'success' | 'info' | 'warning' | 'error' | 'loading';
+}
+
+const toast = {
+  ...baseToast,
+  create: (opts: ToastOptions) => baseToast.add(opts),
+};
 
 const defaults: Parcel[] = [];
 
@@ -94,6 +115,50 @@ function date(t: number | string) {
   }
 }
 
+function formatDateShort(val?: string | number) {
+  if (!val) return '';
+  if (typeof val === 'number') {
+    try {
+      return new Intl.DateTimeFormat('de-DE', {
+        day: '2-digit',
+        month: 'short',
+        timeZone: 'Europe/Berlin',
+      }).format(new Date(val));
+    } catch {
+      return String(val);
+    }
+  }
+  const str = String(val).trim();
+  if (/^\d{10,13}$/.test(str)) {
+    try {
+      return new Intl.DateTimeFormat('de-DE', {
+        day: '2-digit',
+        month: 'short',
+        timeZone: 'Europe/Berlin',
+      }).format(new Date(Number(str)));
+    } catch {
+      return str;
+    }
+  }
+  const parsed = Date.parse(str);
+  if (
+    !isNaN(parsed) &&
+    str.length > 8 &&
+    (str.includes('-') || str.includes('/'))
+  ) {
+    try {
+      return new Intl.DateTimeFormat('de-DE', {
+        day: '2-digit',
+        month: 'short',
+        timeZone: 'Europe/Berlin',
+      }).format(new Date(parsed));
+    } catch {
+      return str;
+    }
+  }
+  return str;
+}
+
 const KEY = 'unterwegs.parcels.v1';
 
 const noopSubscribe = () => () => {};
@@ -103,6 +168,24 @@ const getIsDesktopSnapshot = () =>
 const getServerIsDesktopSnapshot = () => false;
 
 export default function Home() {
+  const isMobile = useIsMobile();
+  const [mobileView, setMobileView] = useState<'list' | 'detail'>('list');
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window === 'undefined') return 'system';
+    try {
+      const saved = (localStorage.getItem('unterwegs.theme.v1') ||
+        localStorage.getItem('theme')) as ThemeMode | null;
+      if (saved && ['system', 'light', 'dark'].includes(saved)) {
+        return saved;
+      }
+    } catch {}
+    return 'system';
+  });
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editNote, setEditNote] = useState('');
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+
   const [parcels, setParcels] = useState<Parcel[]>(defaults);
   const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -123,6 +206,36 @@ export default function Home() {
   useEffect(() => {
     parcelsRef.current = parcels;
   }, [parcels]);
+
+  // Theme application and prefers-color-scheme listener
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const root = document.documentElement;
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    const applyTheme = (currentTheme: ThemeMode) => {
+      try {
+        localStorage.setItem('unterwegs.theme.v1', currentTheme);
+        localStorage.setItem('theme', currentTheme);
+      } catch {}
+
+      const isDark =
+        currentTheme === 'dark' ||
+        (currentTheme === 'system' && mediaQuery.matches);
+      root.classList.toggle('dark', isDark);
+    };
+
+    applyTheme(theme);
+
+    const handleMediaChange = () => {
+      if (theme === 'system') {
+        root.classList.toggle('dark', mediaQuery.matches);
+      }
+    };
+
+    mediaQuery.addEventListener('change', handleMediaChange);
+    return () => mediaQuery.removeEventListener('change', handleMediaChange);
+  }, [theme]);
 
   // Initial load from backend API with localStorage fallback
   useEffect(() => {
@@ -168,7 +281,10 @@ export default function Home() {
       const value = new URLSearchParams(window.location.hash.slice(1)).get(
         'shipment',
       );
-      if (value) setExpanded(value);
+      if (value) {
+        setExpanded(value);
+        if (isMobile) setMobileView('detail');
+      }
     };
     selectFromHash();
     window.addEventListener('hashchange', selectFromHash);
@@ -183,11 +299,24 @@ export default function Home() {
         /* Existing data stays visible while offline. */
       }
     }, 30000);
+
+    const onTrayRefresh = async () => {
+      if (lock.current) return;
+      try {
+        const res = await fetch('/api/parcels');
+        const json = (await res.json()) as { parcels?: Parcel[] };
+        if (res.ok && Array.isArray(json.parcels) && !lock.current) {
+          setParcels(json.parcels);
+        }
+      } catch {}
+    };
+    window.addEventListener('unterwegs:refresh', onTrayRefresh);
     return () => {
       window.clearInterval(timer);
       window.removeEventListener('hashchange', selectFromHash);
+      window.removeEventListener('unterwegs:refresh', onTrayRefresh);
     };
-  }, []);
+  }, [isMobile]);
 
   // Keep localStorage in sync as a local backup
   useEffect(() => {
@@ -211,11 +340,35 @@ export default function Home() {
       });
 
       if (res.ok) {
-        const data = (await res.json()) as { parcels?: Parcel[] };
+        const data = (await res.json()) as {
+          parcels?: Parcel[];
+          errors?: Record<string, string>;
+          updated?: number;
+        };
         if (Array.isArray(data.parcels)) {
           setParcels(data.parcels);
+        }
+        if (data.errors && Object.keys(data.errors).length > 0) {
+          const errorCount = Object.keys(data.errors).length;
+          const firstError = Object.values(data.errors)[0];
+          toast.create({
+            title: 'Aktualisierung mit Fehlern',
+            description:
+              errorCount === 1
+                ? firstError || 'Ein Paket konnte nicht aktualisiert werden.'
+                : `${errorCount} Pakete konnten nicht aktualisiert werden.`,
+            type: 'warning',
+          });
+        }
+        if (Array.isArray(data.parcels)) {
           return;
         }
+      } else {
+        toast.create({
+          title: 'Aktualisierung fehlgeschlagen',
+          description: 'Server antwortete mit einem Fehler.',
+          type: 'error',
+        });
       }
 
       // Fallback: per-item fetch
@@ -256,6 +409,12 @@ export default function Home() {
           }
         }),
       );
+    } catch {
+      toast.create({
+        title: 'Verbindungsfehler',
+        description: 'Paketstatus konnte nicht aktualisiert werden.',
+        type: 'error',
+      });
     } finally {
       lock.current = false;
       setBusy(false);
@@ -264,25 +423,24 @@ export default function Home() {
 
   // Refresh on initial ready
   useEffect(() => {
-    if (ready) void refresh();
+    if (ready) {
+      const timer = setTimeout(() => {
+        void refresh();
+      }, 0);
+      return () => clearTimeout(timer);
+    }
   }, [ready, refresh]);
 
   async function add(e: React.SyntheticEvent<HTMLFormElement>) {
     e.preventDefault();
-    let n = number.trim().toUpperCase().replace(/\s/g, '');
-    if (
-      n.length % 2 === 0 &&
-      n.slice(0, n.length / 2) === n.slice(n.length / 2)
-    ) {
-      n = n.slice(0, n.length / 2);
-    }
+    const n = number.trim().toUpperCase().replace(/\s/g, '');
 
     if (!/^[A-Z0-9]{8,40}$/.test(n)) {
       setMessage('Bitte eine gültige Sendungsnummer eingeben (8–40 Zeichen).');
       return;
     }
 
-    if (parcels.some((p) => p.number === n)) {
+    if (parcels.some((p) => trackingNumbers(p).includes(n))) {
       setMessage('Dieses Paket ist schon in der Liste.');
       return;
     }
@@ -317,6 +475,7 @@ export default function Home() {
       setNote('');
       setMessage('');
       setExpanded(n);
+      if (isMobile) setMobileView('detail');
     } catch {
       setMessage('Fehler beim Speichern. Bitte Verbindung prüfen.');
     } finally {
@@ -427,7 +586,93 @@ export default function Home() {
       (p) =>
         p.id === expanded ||
         p.items.some((i) => trackingNumbers(i).includes(expanded || '')),
-    ) || shipments[0];
+    ) || (isMobile ? null : shipments[0]);
+
+  const isEditing = Boolean(editingId && selected && editingId === selected.id);
+
+  const handleStartEdit = () => {
+    if (!selected) return;
+    setEditName(selected.name);
+    setEditNote(
+      selected.items.length === 1 &&
+        selected.note &&
+        !/^(Sendung |AliExpress Ref:|Über KI hinzugefügt)/.test(selected.note)
+        ? selected.note
+        : '',
+    );
+    setEditingId(selected.id);
+  };
+
+  const handleCancelEdit = () => {
+    setEditingId(null);
+  };
+
+  const handleSaveEdit = async (e?: React.SyntheticEvent) => {
+    if (e) e.preventDefault();
+    if (!selected) return;
+    const newName = editName.trim() || selected.name;
+    const newNote = editNote.trim();
+    const targetNumber = selected.number;
+
+    // Optimistically update parcel state
+    // Note: updateParcelMeta is called on the server via PATCH /api/parcels
+    setParcels((old) =>
+      old.map((p) =>
+        p.number === targetNumber ||
+        trackingNumbers(p).includes(targetNumber) ||
+        trackingNumbers(p).includes(selected.id)
+          ? { ...p, name: newName, note: newNote }
+          : p,
+      ),
+    );
+    setEditingId(null);
+    setIsSavingEdit(true);
+
+    try {
+      const res = await fetch('/api/parcels', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          number: targetNumber,
+          name: newName,
+          note: newNote,
+        }),
+      });
+
+      if (!res.ok) {
+        const errData = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        toast.create({
+          title: 'Fehler beim Speichern',
+          description:
+            errData.error || 'Änderungen konnten nicht gespeichert werden.',
+          type: 'error',
+        });
+      }
+    } catch {
+      toast.create({
+        title: 'Verbindungsfehler',
+        description: 'Änderungen konnten nicht an den Server gesendet werden.',
+        type: 'error',
+      });
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const handleBack = () => {
+    setExpanded(null);
+    setMobileView('list');
+    if (typeof window !== 'undefined' && window.location.hash) {
+      history.replaceState(
+        null,
+        '',
+        window.location.pathname + window.location.search,
+      );
+    }
+  };
+
   const carrier = selected ? carrierTracking(selected) : null;
   const latest = selected?.data?.events?.[0];
   const country = (value?: string) =>
@@ -500,6 +745,44 @@ export default function Home() {
           {isDesktop ? 'Desktop' : 'Paketübersicht'}
         </span>
         <div className="toolbar-actions">
+          <div
+            className="theme-toggle flex items-center rounded-lg border border-border/60 bg-muted/30 p-0.5"
+            aria-label="Farbschema auswählen"
+          >
+            <Button
+              variant={theme === 'system' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setTheme('system')}
+              className={`h-7 px-2 text-xs font-medium ${theme === 'system' ? 'shadow-xs font-semibold' : 'text-muted-foreground'}`}
+              aria-pressed={theme === 'system'}
+              title="System (Automatisch)"
+            >
+              <Laptop size={14} className="mr-1" />
+              <span>System</span>
+            </Button>
+            <Button
+              variant={theme === 'light' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setTheme('light')}
+              className={`h-7 px-2 text-xs font-medium ${theme === 'light' ? 'shadow-xs font-semibold' : 'text-muted-foreground'}`}
+              aria-pressed={theme === 'light'}
+              title="Hell"
+            >
+              <Sun size={14} className="mr-1" />
+              <span>Hell</span>
+            </Button>
+            <Button
+              variant={theme === 'dark' ? 'secondary' : 'ghost'}
+              size="sm"
+              onClick={() => setTheme('dark')}
+              className={`h-7 px-2 text-xs font-medium ${theme === 'dark' ? 'shadow-xs font-semibold' : 'text-muted-foreground'}`}
+              aria-pressed={theme === 'dark'}
+              title="Dunkel"
+            >
+              <Moon size={14} className="mr-1" />
+              <span>Dunkel</span>
+            </Button>
+          </div>
           <Button
             variant="outline"
             disabled={busy}
@@ -588,7 +871,15 @@ export default function Home() {
       )}
       {message && <output className="app-message">{message}</output>}
       <div className="split-layout">
-        <aside className="shipment-sidebar" aria-label="Deine Pakete">
+        <aside
+          className="shipment-sidebar"
+          style={
+            isMobile && mobileView === 'detail'
+              ? { display: 'none' }
+              : undefined
+          }
+          aria-label="Deine Pakete"
+        >
           <div className="sidebar-heading">
             <div>
               <h1>Deine Pakete</h1>
@@ -612,7 +903,10 @@ export default function Home() {
                   key={p.id}
                   className={'shipment-row ' + (chosen ? 'selected' : '')}
                   aria-current={chosen ? 'true' : undefined}
-                  onClick={() => setExpanded(p.id)}
+                  onClick={() => {
+                    setExpanded(p.id);
+                    if (isMobile) setMobileView('detail');
+                  }}
                 >
                   <span
                     className={'row-icon ' + (delivered(p) ? 'arrived' : '')}
@@ -624,6 +918,11 @@ export default function Home() {
                     <span className={p.error ? 'row-error' : ''}>
                       {e ? label(e) : 'Noch kein Versandstatus'}
                     </span>
+                    {p.data?.estimatedDeliveryTime && !delivered(p) && (
+                      <span className="eta-badge text-[11px] font-semibold text-primary">
+                        ETA: {formatDateShort(p.data.estimatedDeliveryTime)}
+                      </span>
+                    )}
                     {p.items.length > 1 && (
                       <span>{p.items.map((i) => i.name).join(', ')}</span>
                     )}
@@ -653,14 +952,26 @@ export default function Home() {
         </aside>
         <section
           className="shipment-detail"
+          style={
+            isMobile && mobileView === 'list'
+              ? { display: 'none' }
+              : undefined
+          }
           aria-label="Sendungsdetails"
-          key={selected?.number || 'empty'}
         >
           {!selected ? (
             <div className="empty">
               <Package size={40} />
-              <h2>Noch nichts unterwegs.</h2>
-              <p>Füge ein Paket hinzu, um seinen Versandweg zu verfolgen.</p>
+              <h2>
+                {shipments.length
+                  ? 'Keine Sendung ausgewählt'
+                  : 'Noch nichts unterwegs.'}
+              </h2>
+              <p>
+                {shipments.length
+                  ? 'Wähle eine Sendung aus der Liste, um die Details anzuzeigen.'
+                  : 'Füge ein Paket hinzu, um seinen Versandweg zu verfolgen.'}
+              </p>
               <Button
                 className="action primary"
                 onClick={() => setAdding(true)}
@@ -671,44 +982,133 @@ export default function Home() {
             </div>
           ) : (
             <>
-              <header className="detail-heading">
-                <div>
-                  <p className="detail-kicker">SENDUNGSDETAILS</p>
-                  <h2>{selected.name}</h2>
-                  {selected.items.length === 1 &&
-                    selected.note &&
-                    !/^(Sendung |AliExpress Ref:|Über KI hinzugefügt)/.test(
-                      selected.note,
-                    ) && <p className="detail-note">{selected.note}</p>}
+              {isMobile && (
+                <div className="mobile-back-bar md:hidden mb-4">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="back-button gap-1.5 -ml-2 text-muted-foreground hover:text-foreground"
+                    onClick={handleBack}
+                  >
+                    <ArrowLeft size={16} />
+                    <span>Zurück zur Paketliste</span>
+                  </Button>
                 </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger
-                    render={
+              )}
+              {isEditing ? (
+                <header className="detail-heading editing">
+                  <form
+                    className="inline-edit-form w-full flex flex-col gap-2.5 p-3 rounded-lg border border-border/80 bg-muted/20"
+                    onSubmit={handleSaveEdit}
+                  >
+                    <p className="detail-kicker">SENDUNGSDETAILS BEARBEITEN</p>
+                    <div className="flex flex-col sm:flex-row gap-2">
+                      <div className="flex-1">
+                        <label
+                          htmlFor="edit-name"
+                          className="text-xs font-medium text-muted-foreground mb-1 block"
+                        >
+                          Name / Bezeichnung
+                        </label>
+                        <Input
+                          id="edit-name"
+                          value={editName}
+                          onChange={(e) => setEditName(e.target.value)}
+                          placeholder="Paketname"
+                          maxLength={100}
+                        />
+                      </div>
+                      <div className="flex-1">
+                        <label
+                          htmlFor="edit-note"
+                          className="text-xs font-medium text-muted-foreground mb-1 block"
+                        >
+                          Notiz (optional)
+                        </label>
+                        <Input
+                          id="edit-note"
+                          value={editNote}
+                          onChange={(e) => setEditNote(e.target.value)}
+                          placeholder="Zusätzliche Notiz"
+                          maxLength={100}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <Button
+                        type="submit"
+                        size="sm"
+                        className="action primary"
+                        disabled={isSavingEdit}
+                      >
+                        <Check size={14} className="mr-1" />
+                        Speichern
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        onClick={handleCancelEdit}
+                        disabled={isSavingEdit}
+                      >
+                        <X size={14} className="mr-1" />
+                        Abbrechen
+                      </Button>
+                    </div>
+                  </form>
+                </header>
+              ) : (
+                <header className="detail-heading">
+                  <div className="flex-1 min-w-0">
+                    <p className="detail-kicker">SENDUNGSDETAILS</p>
+                    <div className="flex items-center gap-2">
+                      <h2>{selected.name}</h2>
                       <Button
                         variant="ghost"
-                        aria-label="Aktionen für dieses Paket"
-                        className="menu-trigger"
-                      />
-                    }
-                  >
-                    <MoreHorizontal size={20} />
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    {selected.items.map((item) => (
-                      <DropdownMenuItem
-                        key={item.number}
-                        variant="destructive"
-                        onClick={() => removeParcel(item.number)}
+                        size="sm"
+                        onClick={handleStartEdit}
+                        className="edit-button h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                        aria-label="Sendungsname und Notiz bearbeiten"
+                        title="Name und Notiz bearbeiten"
                       >
-                        <Trash2 size={16} />
-                        {selected.items.length > 1
-                          ? `${item.name} entfernen`
-                          : 'Paket entfernen'}
-                      </DropdownMenuItem>
-                    ))}
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              </header>
+                        <Pencil size={15} />
+                      </Button>
+                    </div>
+                    {selected.items.length === 1 &&
+                      selected.note &&
+                      !/^(Sendung |AliExpress Ref:|Über KI hinzugefügt)/.test(
+                        selected.note,
+                      ) && <p className="detail-note">{selected.note}</p>}
+                  </div>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger
+                      render={
+                        <Button
+                          variant="ghost"
+                          aria-label="Aktionen für dieses Paket"
+                          className="menu-trigger"
+                        />
+                      }
+                    >
+                      <MoreHorizontal size={20} />
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      {selected.items.map((item) => (
+                        <DropdownMenuItem
+                          key={item.number}
+                          variant="destructive"
+                          onClick={() => removeParcel(item.number)}
+                        >
+                          <Trash2 size={16} />
+                          {selected.items.length > 1
+                            ? `${item.name} entfernen`
+                            : 'Paket entfernen'}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </header>
+              )}
               <div className="status-panel">
                 <div className="status-panel-top">
                   <span className="status-label">
@@ -728,6 +1128,16 @@ export default function Home() {
                       ? 'Status nicht verfügbar'
                       : 'Warte auf Trackingdaten'}
                 </h3>
+                {selected.data?.estimatedDeliveryTime &&
+                  !delivered(selected) && (
+                    <div className="status-eta flex items-center gap-1.5 font-medium text-xs sm:text-sm text-foreground/90 mt-1">
+                      <Calendar size={14} className="text-primary shrink-0" />
+                      <span>
+                        Voraussichtliche Lieferung:{' '}
+                        {formatDateShort(selected.data.estimatedDeliveryTime)}
+                      </span>
+                    </div>
+                  )}
                 <div className="country-route">
                   <span>{country(selected.data?.origin)}</span>
                   <span className="route-line" />
@@ -804,6 +1214,21 @@ export default function Home() {
                     <span>{events.length} Meldungen</span>
                   </div>
                   <ol className="timeline">
+                    {selected.data?.estimatedDeliveryTime &&
+                      !delivered(selected) && (
+                        <li className="timeline-eta">
+                          <span className="timeline-dot eta" />
+                          <div>
+                            <strong>Voraussichtliche Zustellung</strong>
+                            <time>
+                              {formatDateShort(
+                                selected.data.estimatedDeliveryTime,
+                              )}
+                            </time>
+                            <p>Prognostiziertes Lieferdatum</p>
+                          </div>
+                        </li>
+                      )}
                     {events.map((event, index) => (
                       <li key={event.time + '-' + index}>
                         <span
@@ -916,6 +1341,7 @@ export default function Home() {
           )}
         </section>
       </div>
+      <Toaster />
     </main>
   );
 }

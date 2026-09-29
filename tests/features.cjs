@@ -224,3 +224,261 @@ test('provider queries retain the working Cainiao number after carrier handover'
   p.data.previousNumbers = ['3070000000000015', 'AP123456789'];
   assert.equal(trackingQueryNumber(p), 'AP123456789');
 });
+
+test('Feature 2: updateParcelMeta updates name and note, persists, and finds by primary or linked number', () => {
+  const p1 = parcel('3070000000000020', '00340000000000020000', 'Original Name');
+  p1.note = 'Original Note';
+  const { parcelStore } = require(path.join(runtime, 'store.js'));
+  parcelStore.setParcelsFromClient([p1]);
+
+  // 1. Update by primary number
+  const updated1 = parcelStore.updateParcelMeta('3070000000000020', {
+    name: 'Updated Name 1',
+    note: 'Updated Note 1',
+  });
+  assert.ok(updated1);
+  assert.equal(updated1.name, 'Updated Name 1');
+  assert.equal(updated1.note, 'Updated Note 1');
+  assert.ok(updated1.updatedAt);
+
+  // 2. Verify file persistence in runtime parcels.json
+  const persistedRaw = fs.readFileSync(path.join(runtime, 'parcels.json'), 'utf8');
+  const persistedList = JSON.parse(persistedRaw);
+  const foundInDisk = persistedList.find((p) => p.number === '3070000000000020');
+  assert.ok(foundInDisk);
+  assert.equal(foundInDisk.name, 'Updated Name 1');
+  assert.equal(foundInDisk.note, 'Updated Note 1');
+
+  // 3. Update by linked international number
+  const updated2 = parcelStore.updateParcelMeta('00340000000000020000', {
+    name: 'Updated Name 2',
+    note: 'Updated Note 2',
+  });
+  assert.ok(updated2);
+  assert.equal(updated2.name, 'Updated Name 2');
+  assert.equal(updated2.note, 'Updated Note 2');
+
+  // 4. Updating non-existent returns null
+  assert.equal(parcelStore.updateParcelMeta('NONEXISTENT999', { name: 'Foo' }), null);
+});
+
+test('Feature 5: parseCainiaoItem parses estimatedDeliveryTime from item fields and traces, and buildAiSummary includes it', () => {
+  const { parseCainiaoItem } = require(path.join(runtime, 'tracking.js'));
+
+  // 1. From item.estimatedDeliveryTime timestamp
+  const itemWithEta = {
+    mailNo: '3070000000000021',
+    destCountry: 'DE',
+    estimatedDeliveryTime: 1792000000000,
+    detailList: [],
+  };
+  const parsed1 = parseCainiaoItem(itemWithEta);
+  assert.equal(parsed1.estimatedDeliveryTime, 1792000000000);
+
+  // 2. From item.promiseDeliveryTime
+  const itemWithPromise = {
+    mailNo: '3070000000000022',
+    destCountry: 'DE',
+    promiseDeliveryTime: '2026-10-15',
+  };
+  const parsed2 = parseCainiaoItem(itemWithPromise);
+  assert.equal(parsed2.estimatedDeliveryTime, '2026-10-15');
+
+  // 3. From item.estimatedDeliveryTimeDesc
+  const itemWithDesc = {
+    mailNo: '3070000000000023',
+    destCountry: 'DE',
+    estimatedDeliveryTimeDesc: 'Estimated delivery: 12. Okt',
+  };
+  const parsed3 = parseCainiaoItem(itemWithDesc);
+  assert.equal(parsed3.estimatedDeliveryTime, 'Estimated delivery: 12. Okt');
+
+  // 4. From trace description match
+  const itemWithTraceEta = {
+    mailNo: '3070000000000024',
+    destCountry: 'DE',
+    detailList: [
+      {
+        desc: 'Voraussichtliche Zustellung: 14. Okt',
+        actionCode: 'GTMS_DELIVERING',
+        time: 1000,
+      },
+    ],
+  };
+  const parsed4 = parseCainiaoItem(itemWithTraceEta);
+  assert.equal(parsed4.estimatedDeliveryTime, '14. Okt');
+
+  // 5. Check buildAiSummary
+  const pWithEta = parcel('3070000000000021', undefined, 'ETA Paket');
+  pWithEta.data.estimatedDeliveryTime = '12. Okt';
+  const summary = buildAiSummary([pWithEta]);
+  assert.equal(summary.items[0].estimatedDeliveryTime, '12. Okt');
+  assert.equal(summary.shipments[0].estimatedDeliveryTime, '12. Okt');
+  assert.ok(summary.markdownSummary.includes('Voraussichtliche Lieferung: 12. Okt'));
+});
+
+test('Feature 8: carrierTracking detects DHL, DPD, Hermes, GLS, UPS, preserves AP exclusion, and detects DHL handover', () => {
+  // 1. UPS (1Z...)
+  const ups = carrierTracking('1Z9999999999999999');
+  assert.ok(ups);
+  assert.equal(ups.name, 'UPS');
+  assert.equal(ups.inferred, true);
+  assert.ok(ups.url.includes('tracknum=1Z9999999999999999'));
+
+  // 2. DPD (14 digits)
+  const dpdDirect = carrierTracking('01234567890123');
+  assert.ok(dpdDirect);
+  assert.equal(dpdDirect.name, 'DPD');
+  assert.equal(dpdDirect.inferred, true);
+  assert.ok(dpdDirect.url.includes('shipment/01234567890123'));
+
+  // 3. Hermes (16 digits and H10)
+  const hermes16 = carrierTracking('1234567890123456');
+  assert.ok(hermes16);
+  assert.equal(hermes16.name, 'Hermes');
+  assert.ok(hermes16.url.includes('sendungsdetails#1234567890123456'));
+
+  const hermesH10 = carrierTracking('H1012345678901234567');
+  assert.ok(hermesH10);
+  assert.equal(hermesH10.name, 'Hermes');
+
+  // 4. GLS (11 digits)
+  const gls = carrierTracking('12345678901');
+  assert.ok(gls);
+  assert.equal(gls.name, 'GLS');
+  assert.ok(gls.url.includes('match=12345678901'));
+
+  // 5. DHL (0034... and domestic 12 digits)
+  const dhl0034 = carrierTracking('00341234567890123456');
+  assert.ok(dhl0034);
+  assert.equal(dhl0034.name, 'DHL');
+  assert.ok(dhl0034.url.includes('piececode=00341234567890123456'));
+
+  const dhl12 = carrierTracking('123456789012');
+  assert.ok(dhl12);
+  assert.equal(dhl12.name, 'DHL');
+
+  // 6. Negative exclusion preserved: AP123456789, LP..., CN...
+  assert.equal(carrierTracking('AP123456789'), null);
+  assert.equal(carrierTracking('LP00123456789012'), null);
+  assert.equal(carrierTracking('3070000000000014'), null);
+
+  // 7. Automatic DHL handover for German Cainiao shipments
+  const { parseCainiaoItem } = require(path.join(runtime, 'tracking.js'));
+  const cainiaoHandover = parseCainiaoItem({
+    mailNo: '3070000000000030',
+    destCountry: 'Deutschland',
+    copyRealMailNo: '00340000000000030000',
+    detailList: [
+      {
+        desc: 'Am Transportknoten angekommen - An DHL übergeben: 00340000000000030000',
+        actionCode: 'LH_HO_IN_SUCCESS',
+        time: 2000,
+      },
+    ],
+  });
+  assert.equal(cainiaoHandover.carrier, 'DHL');
+  assert.equal(cainiaoHandover.internationalNumber, '00340000000000030000');
+
+  const handoverParcel = {
+    number: '3070000000000030',
+    name: 'Handover Test',
+    note: '',
+    data: cainiaoHandover,
+  };
+  const dhlInfo = carrierTracking(handoverParcel);
+  assert.ok(dhlInfo);
+  assert.equal(dhlInfo.name, 'DHL');
+  assert.equal(dhlInfo.number, '00340000000000030000');
+});
+
+test('Feature 8: store.add creates direct carrier tracking when Cainiao fails for recognized domestic carriers', async () => {
+  const { parcelStore } = require(path.join(runtime, 'store.js'));
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => {
+      throw new Error('Noch keine Trackingdaten bei Cainiao hinterlegt.');
+    };
+
+    // Adding UPS parcel directly
+    const upsParcel = await parcelStore.add({
+      number: '1Z12345E0205271688',
+      name: 'UPS Direkt',
+    });
+    assert.equal(upsParcel.error, undefined);
+    assert.ok(upsParcel.data);
+    assert.equal(upsParcel.data.carrier, 'UPS');
+    assert.equal(upsParcel.data.status, 'ORDER_PROCESSING');
+    const upsLink = carrierTracking(upsParcel);
+    assert.ok(upsLink);
+    assert.equal(upsLink.name, 'UPS');
+
+    // Adding DHL parcel directly
+    const dhlParcel = await parcelStore.add({
+      number: '00340434161094015848',
+      name: 'DHL Direkt',
+    });
+    assert.equal(dhlParcel.error, undefined);
+    assert.ok(dhlParcel.data);
+    assert.equal(dhlParcel.data.carrier, 'DHL');
+    const dhlLink = carrierTracking(dhlParcel);
+    assert.ok(dhlLink);
+    assert.equal(dhlLink.name, 'DHL');
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
+test('Bug 3 & 4: number halving removed and duplicate check rejects primary and linked numbers', async () => {
+  const { parcelStore } = require(path.join(runtime, 'store.js'));
+  const originalFetch = global.fetch;
+  try {
+    global.fetch = async () => {
+      throw new Error('offline');
+    };
+
+    // Bug 3: A number with repeating halves is NOT halved
+    // e.g. 1234567812345678
+    const repeatingNum = '1234567812345678';
+    const added = await parcelStore.add({
+      number: repeatingNum,
+      name: 'Repeating Half Test',
+    });
+    assert.equal(added.number, repeatingNum);
+
+    // Bug 4: Attempting to add the exact same number throws duplicate error
+    await assert.rejects(
+      async () => {
+        await parcelStore.add({
+          number: repeatingNum,
+          name: 'Duplicate Test',
+        });
+      },
+      {
+        message: 'Sendung ist bereits vorhanden.',
+      },
+    );
+
+    // Bug 4: Attempting to add by linked/international number also throws duplicate error
+    const primaryNum = '3079999999999999';
+    const linkedIntNum = '00349999999999999999';
+    parcelStore.setParcelsFromClient([
+      parcel(primaryNum, linkedIntNum, 'Primary Parcel'),
+    ]);
+
+    await assert.rejects(
+      async () => {
+        await parcelStore.add({
+          number: linkedIntNum,
+          name: 'Linked Duplicate Test',
+        });
+      },
+      {
+        message: 'Sendung ist bereits vorhanden.',
+      },
+    );
+  } finally {
+    global.fetch = originalFetch;
+  }
+});
+
