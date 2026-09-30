@@ -104,10 +104,15 @@ const cainiaoCache = new Map<string, { at: number; data: TrackingData }>();
 declare global {
   // eslint-disable-next-line no-var
   var __unterwegsCainiaoCookie: string | undefined;
+  // eslint-disable-next-line no-var
+  var __unterwegsCainiaoUserAgent: string | undefined;
 }
 
-export function setCainiaoCookie(cookie: string | null) {
+export function setCainiaoCookie(cookie: string | null, userAgent?: string) {
   globalThis.__unterwegsCainiaoCookie = cookie || undefined;
+  if (userAgent) {
+    globalThis.__unterwegsCainiaoUserAgent = userAgent;
+  }
   if (cookie) {
     cainiaoCache.clear();
   }
@@ -118,6 +123,13 @@ export function getCainiaoCookie(): string | null {
     return globalThis.__unterwegsCainiaoCookie;
   }
   return getCainiaoCookieHeader();
+}
+
+export function getCainiaoUserAgent(): string {
+  return (
+    globalThis.__unterwegsCainiaoUserAgent ||
+    'Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0'
+  );
 }
 
 function getCainiaoCookieHeader(): string | null {
@@ -296,17 +308,19 @@ export async function fetchCainiaoBatch(
 
   // Single batch query with comma-separated numbers (as in Home Assistant integration)
   const url = `https://global.cainiao.com/global/detail.json?mailNos=${encodeURIComponent(toFetch.join(','))}&lang=en-US`;
+  const ua = getCainiaoUserAgent();
   const headers: Record<string, string> = {
-    'User-Agent':
-      'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+    'User-Agent': ua,
     Accept: 'application/json, text/plain, */*',
     'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
     Referer: 'https://global.cainiao.com/',
-    'Sec-Ch-Ua':
-      '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"',
-    'Sec-Ch-Ua-Mobile': '?0',
-    'Sec-Ch-Ua-Platform': '"Linux"',
   };
+  if (!ua.includes('Firefox')) {
+    headers['Sec-Ch-Ua'] =
+      '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"';
+    headers['Sec-Ch-Ua-Mobile'] = '?0';
+    headers['Sec-Ch-Ua-Platform'] = '"Linux"';
+  }
 
   const cookie = getCainiaoCookie();
   if (cookie) {

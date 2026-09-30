@@ -874,7 +874,7 @@ export default function Home() {
               </DropdownMenuItem>
               <DropdownMenuItem onClick={openVerification}>
                 <ShieldCheck size={16} />
-                Cainiao-Verifizierung (Captcha)
+                Cainiao-Verifizierung im Browser
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
@@ -1265,7 +1265,7 @@ export default function Home() {
                       className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs gap-1.5 shadow-xs"
                     >
                       <ExternalLink size={14} />
-                      Verifizierung öffnen
+                      Im Browser verifizieren
                     </Button>
                   </div>
                 ) : (
@@ -1436,7 +1436,7 @@ export default function Home() {
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3 text-amber-600 dark:text-amber-400">
                 <ShieldAlert size={28} className="shrink-0" />
-                <h3 className="text-lg font-bold">Cainiao-Verifizierung</h3>
+                <h3 className="text-lg font-bold">Cainiao-Verifizierung im Browser</h3>
               </div>
               <Button
                 variant="ghost"
@@ -1449,27 +1449,39 @@ export default function Home() {
               </Button>
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Cainiao verlangt eine Sicherheitsüberprüfung (Schieberegler / Captcha), um aktuelle Tracking-Daten für deine Sendungen bereitzustellen.
+              Cainiao verlangt einen Sicherheits-Schieberegler (Captcha), um aktuelle Tracking-Daten für deine Sendungen bereitzustellen.
             </p>
             <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg border border-border/50">
-              💡 Nach dem Klick öffnet sich das Verifizierungsfenster. Löse dort kurz den Schieberegler. Falls &apos;Oops... something&apos;s wrong&apos; erscheint, drücke einfach <strong>F5</strong> (oder Menü &rarr; Seite neu laden), um den Regler frisch zu laden. Deine Sitzung wird automatisch übernommen.
+              💡 Die Tracking-Seite öffnet sich direkt in deinem Browser (Firefox). Löse dort den Schieberegler – sobald die Freigabe erteilt ist, synchronisiert die App deine Sendungen automatisch.
             </p>
-            <div className="flex items-center justify-end gap-2 pt-2">
+            <div className="flex items-center justify-between gap-2 pt-2">
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setShowVerifyModal(false)}
+                onClick={() => {
+                  setShowVerifyModal(false);
+                  void refresh();
+                }}
               >
-                Später
+                Jetzt prüfen
               </Button>
-              <Button
-                className="bg-amber-600 hover:bg-amber-700 text-white font-medium gap-1.5 shadow-xs"
-                size="sm"
-                onClick={openVerification}
-              >
-                <ExternalLink size={15} />
-                Verifizierung öffnen
-              </Button>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setShowVerifyModal(false)}
+                >
+                  Später
+                </Button>
+                <Button
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-medium gap-1.5 shadow-xs"
+                  size="sm"
+                  onClick={openVerification}
+                >
+                  <ExternalLink size={15} />
+                  Im Browser öffnen
+                </Button>
+              </div>
             </div>
           </div>
         </div>

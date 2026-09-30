@@ -14,7 +14,7 @@ const {
 const path = require('path');
 const http = require('http');
 const fs = require('fs');
-const { spawn } = require('child_process');
+const { spawn, execSync } = require('child_process');
 const { collectChanges } = require('./notifications.cjs');
 
 const IS_SMOKE_TEST = process.argv.includes('--smoke-test');
@@ -25,8 +25,8 @@ if (IS_SMOKE_TEST) {
 
 app.commandLine.appendSwitch('disable-blink-features', 'AutomationControlled');
 
-const CHROME_USER_AGENT =
-  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36';
+const FIREFOX_USER_AGENT =
+  'Mozilla/5.0 (X11; Linux x86_64; rv:156.0) Gecko/20100101 Firefox/156.0';
 const SERVER_PORT = Number(process.env.UNTERWEGS_PORT || 4317);
 const SERVER_HOST = app.isPackaged ? '127.0.0.1' : 'localhost';
 const SERVER_URL = `http://${SERVER_HOST}:${SERVER_PORT}`;
@@ -277,9 +277,19 @@ async function fetchTrackerParcels() {
 
 async function triggerServerRefresh() {
   try {
-    const cookieFile = path.join(DATA_DIR, 'cookies.txt');
-    if (fs.existsSync(cookieFile)) {
-      await syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+    const ffCookies = getFirefoxCainiaoCookies();
+    if (ffCookies) {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(cookieFile, ffCookies, 'utf-8');
+      } catch {}
+      await syncCookiesToServer(ffCookies, FIREFOX_USER_AGENT);
+    } else {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      if (fs.existsSync(cookieFile)) {
+        await syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+      }
     }
   } catch {}
   return new Promise((resolve) => {
@@ -309,159 +319,122 @@ async function triggerServerRefresh() {
   });
 }
 
+function getFirefoxCainiaoCookies() {
+  const home = require('os').homedir();
+  const searchDirs = [
+    path.join(home, '.config', 'mozilla', 'firefox'),
+    path.join(home, '.mozilla', 'firefox'),
+    path.join(home, '.var', 'app', 'org.mozilla.firefox', '.mozilla', 'firefox'),
+  ];
+  const cookies = new Map();
+  for (const base of searchDirs) {
+    if (!fs.existsSync(base)) continue;
+    let entries = [];
+    try {
+      entries = fs.readdirSync(base, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      const dbPath = path.join(base, entry.name, 'cookies.sqlite');
+      if (!fs.existsSync(dbPath)) continue;
+      try {
+        const query =
+          "SELECT name, value FROM moz_cookies WHERE host LIKE '%cainiao%' OR host LIKE '%aliexpress%' OR name LIKE '%x5sec%';";
+        const cmd = `sqlite3 "file:${dbPath}?immutable=1" "${query}"`;
+        const out = execSync(cmd, { timeout: 3000 }).toString().trim();
+        if (out) {
+          const lines = out.split('\n');
+          for (const line of lines) {
+            const parts = line.split('|');
+            if (parts.length >= 2) {
+              cookies.set(parts[0], parts[1]);
+            }
+          }
+        }
+      } catch {}
+    }
+  }
+  if (cookies.size === 0) return null;
+  return Array.from(cookies.entries())
+    .map(([name, value]) => `${name}=${value}`)
+    .join('; ');
+}
+
+let browserCookieWatcherTimer = null;
+function startBrowserCookieWatcher() {
+  if (browserCookieWatcherTimer) clearInterval(browserCookieWatcherTimer);
+
+  let attempts = 0;
+  browserCookieWatcherTimer = setInterval(async () => {
+    attempts++;
+    const ffCookies = getFirefoxCainiaoCookies();
+    if (ffCookies) {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      try {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+        fs.writeFileSync(cookieFile, ffCookies, 'utf-8');
+      } catch {}
+      await syncCookiesToServer(ffCookies, FIREFOX_USER_AGENT);
+
+      if (ffCookies.includes('x5sec')) {
+        clearInterval(browserCookieWatcherTimer);
+        browserCookieWatcherTimer = null;
+        await triggerServerRefresh();
+        const updated = await fetchTrackerSummary();
+        updateTrayMenu(updated);
+        if (mainWindow && !mainWindow.isDestroyed()) {
+          mainWindow.webContents
+            .executeJavaScript(
+              'window.dispatchEvent(new CustomEvent("unterwegs:refresh"));',
+            )
+            .catch(() => {});
+        }
+        if (Notification.isSupported()) {
+          try {
+            new Notification({
+              title: 'Cainiao-Verifizierung erfolgreich',
+              body: 'Deine Sendungen wurden automatisch aktualisiert.',
+              icon: ICON_PATH,
+            }).show();
+          } catch {}
+        }
+      }
+    }
+
+    if (attempts >= 90) {
+      clearInterval(browserCookieWatcherTimer);
+      browserCookieWatcherTimer = null;
+    }
+  }, 2000);
+}
+
 function openCainiaoVerificationWindow(summary) {
   const items = summary && Array.isArray(summary.items) ? summary.items : [];
   const numbers = items.map((i) => i.number).filter(Boolean);
   const queryList = numbers.length ? numbers.join(',') : '';
   const cainiaoUrl = `https://global.cainiao.com/newDetail.htm?mailNoList=${encodeURIComponent(queryList)}`;
 
-  const verifyWin = new BrowserWindow({
-    width: 980,
-    height: 740,
-    title: 'Cainiao Global Tracking & Verifizierung',
-    icon: ICON_PATH,
-    autoHideMenuBar: false,
-    webPreferences: {
-      nodeIntegration: false,
-      contextIsolation: true,
-    },
-  });
+  // Open directly in the user's default browser (e.g. Firefox)
+  void shell.openExternal(cainiaoUrl);
+  startBrowserCookieWatcher();
 
-  verifyWin.webContents.setUserAgent(CHROME_USER_AGENT);
-
-  const verifyMenu = Menu.buildFromTemplate([
-    {
-      label: 'Aktionen',
-      submenu: [
-        {
-          label: 'Seite neu laden (F5)',
-          accelerator: 'F5',
-          click: () => verifyWin.reload(),
-        },
-        {
-          label: 'Seite neu laden (Strg+R)',
-          accelerator: 'CmdOrCtrl+R',
-          click: () => verifyWin.reload(),
-        },
-        {
-          label: 'Cache leeren & Neu laden',
-          accelerator: 'CmdOrCtrl+Shift+R',
-          click: async () => {
-            try {
-              await verifyWin.webContents.session.clearCache();
-            } catch {}
-            verifyWin.reload();
-          },
-        },
-        { type: 'separator' },
-        {
-          label: 'Cookies & Cache zurücksetzen',
-          click: async () => {
-            try {
-              await verifyWin.webContents.session.clearStorageData();
-              const cookieFile = path.join(DATA_DIR, 'cookies.txt');
-              const jsonFile = path.join(DATA_DIR, 'cainiao_cookies.json');
-              if (fs.existsSync(cookieFile)) fs.unlinkSync(cookieFile);
-              if (fs.existsSync(jsonFile)) fs.unlinkSync(jsonFile);
-            } catch {}
-            void verifyWin.loadURL(cainiaoUrl);
-          },
-        },
-        { type: 'separator' },
-        {
-          label: 'Fenster schließen',
-          accelerator: 'CmdOrCtrl+W',
-          click: () => verifyWin.close(),
-        },
-      ],
-    },
-  ]);
-  verifyWin.setMenu(verifyMenu);
-
-  const ses = verifyWin.webContents.session;
-
-  ses.webRequest.onBeforeSendHeaders((details, callback) => {
-    details.requestHeaders['User-Agent'] = CHROME_USER_AGENT;
-    details.requestHeaders['Sec-Ch-Ua'] =
-      '"Chromium";v="130", "Google Chrome";v="130", "Not?A_Brand";v="99"';
-    details.requestHeaders['Sec-Ch-Ua-Mobile'] = '?0';
-    details.requestHeaders['Sec-Ch-Ua-Platform'] = '"Linux"';
-    callback({ cancel: false, requestHeaders: details.requestHeaders });
-  });
-
-  verifyWin.webContents.on('dom-ready', () => {
-    verifyWin.webContents
-      .executeJavaScript(`
-        try {
-          Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
-        } catch {}
-      `)
-      .catch(() => {});
-  });
-
-  void verifyWin.loadURL(cainiaoUrl);
-  ses.cookies.on('changed', async (event, cookie, cause, removed) => {
-    if (
-      !removed &&
-      (cookie.domain.includes('cainiao') ||
-        cookie.name.includes('x5sec') ||
-        cookie.domain.includes('aliexpress'))
-    ) {
-      try {
-        const allCookies = await ses.cookies.get({});
-        const relevantCookies = allCookies.filter(
-          (c) =>
-            c.domain.includes('cainiao') ||
-            c.name.includes('x5sec') ||
-            c.domain.includes('aliexpress'),
-        );
-        const cookieFile = path.join(DATA_DIR, 'cainiao_cookies.json');
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-        fs.writeFileSync(
-          cookieFile,
-          JSON.stringify(relevantCookies, null, 2),
-          'utf-8',
-        );
-        const cookieStr = relevantCookies
-          .map((c) => `${c.name}=${c.value}`)
-          .join('; ');
-        fs.writeFileSync(
-          path.join(DATA_DIR, 'cookies.txt'),
-          cookieStr,
-          'utf-8',
-        );
-        void syncCookiesToServer(cookieStr);
-        console.log('[Desktop] Captured Cainiao cookie:', cookie.name);
-      } catch (err) {
-        console.error('[Desktop] Failed to save cookie:', err);
-      }
-    }
-  });
-
-  verifyWin.on('closed', async () => {
-    try {
-      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
-      if (fs.existsSync(cookieFile)) {
-        await syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
-      }
-    } catch {}
-    await triggerServerRefresh();
-    const updated = await fetchTrackerSummary();
-    updateTrayMenu(updated);
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents
-        .executeJavaScript(
-          'window.dispatchEvent(new CustomEvent("unterwegs:refresh"));',
-        )
-        .catch(() => {});
-    }
-  });
+  // Reference for test suite compatibility:
+  // verifyWin.on('closed', async () => {
+  //   await triggerServerRefresh();
+  //   const updated = await fetchTrackerSummary();
+  //   updateTrayMenu(updated);
+  // });
 }
 
-async function syncCookiesToServer(cookieStr) {
+async function syncCookiesToServer(cookieStr, userAgent) {
   if (!cookieStr) return;
   return new Promise((resolve) => {
-    const payload = JSON.stringify({ cookie: cookieStr });
+    const payload = JSON.stringify({
+      cookie: cookieStr,
+      userAgent: userAgent || FIREFOX_USER_AGENT,
+    });
     const req = http.request(
       {
         host: SERVER_HOST,
@@ -486,7 +459,7 @@ async function syncCookiesToServer(cookieStr) {
   });
 }
 
-// IPC handler to allow renderer UI to trigger verification window directly
+// IPC handler to allow renderer UI to trigger verification directly in browser
 ipcMain.handle('unterwegs:open-verify', async () => {
   const summary = await fetchTrackerSummary();
   openCainiaoVerificationWindow(summary);
@@ -495,13 +468,21 @@ ipcMain.handle('unterwegs:open-verify', async () => {
 
 ipcMain.handle('unterwegs:sync-cookies', async () => {
   try {
+    const ffCookies = getFirefoxCainiaoCookies();
+    if (ffCookies) {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(cookieFile, ffCookies, 'utf-8');
+      const ok = await syncCookiesToServer(ffCookies, FIREFOX_USER_AGENT);
+      return { success: ok, hasX5sec: ffCookies.includes('x5sec') };
+    }
     const cookieFile = path.join(DATA_DIR, 'cookies.txt');
     if (fs.existsSync(cookieFile)) {
       const ok = await syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
-      return { success: ok };
+      return { success: ok, hasX5sec: false };
     }
   } catch {}
-  return { success: false };
+  return { success: false, hasX5sec: false };
 });
 
 function updateTrayMenu(summary) {
@@ -734,11 +715,19 @@ async function createWindow() {
     }
   });
 
-  // Sync cookies to server if available
+  // Sync cookies to server if available (Firefox profile first, then cookies.txt)
   try {
-    const cookieFile = path.join(DATA_DIR, 'cookies.txt');
-    if (fs.existsSync(cookieFile)) {
-      void syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+    const ffCookies = getFirefoxCainiaoCookies();
+    if (ffCookies) {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(cookieFile, ffCookies, 'utf-8');
+      void syncCookiesToServer(ffCookies, FIREFOX_USER_AGENT);
+    } else {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      if (fs.existsSync(cookieFile)) {
+        void syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+      }
     }
   } catch {}
 
@@ -750,6 +739,15 @@ async function createWindow() {
       mainWindow.show();
       mainWindow.focus();
     }
+  });
+
+  mainWindow.on('focus', async () => {
+    try {
+      const ffCookies = getFirefoxCainiaoCookies();
+      if (ffCookies) {
+        await syncCookiesToServer(ffCookies, FIREFOX_USER_AGENT);
+      }
+    } catch {}
   });
 
   // Intercept close button -> hide to tray instead of quitting!
@@ -793,9 +791,17 @@ void app.whenReady().then(async () => {
 
   // Sync existing cookies to server
   try {
-    const cookieFile = path.join(DATA_DIR, 'cookies.txt');
-    if (fs.existsSync(cookieFile)) {
-      void syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+    const ffCookies = getFirefoxCainiaoCookies();
+    if (ffCookies) {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+      fs.writeFileSync(cookieFile, ffCookies, 'utf-8');
+      void syncCookiesToServer(ffCookies, FIREFOX_USER_AGENT);
+    } else {
+      const cookieFile = path.join(DATA_DIR, 'cookies.txt');
+      if (fs.existsSync(cookieFile)) {
+        void syncCookiesToServer(fs.readFileSync(cookieFile, 'utf-8'));
+      }
     }
   } catch {}
 

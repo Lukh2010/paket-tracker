@@ -10,6 +10,7 @@ export async function POST(request: Request) {
     const body = (await request.json().catch(() => ({}))) as {
       cookie?: string;
       cookies?: Array<{ name: string; value: string }>;
+      userAgent?: string;
     };
 
     let cookieStr = '';
@@ -32,7 +33,7 @@ export async function POST(request: Request) {
       );
     }
 
-    setCainiaoCookie(cookieStr);
+    setCainiaoCookie(cookieStr, body.userAgent);
 
     try {
       const diskPaths = [
