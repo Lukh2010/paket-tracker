@@ -81,7 +81,7 @@ export function carrierTracking(
   const destination = parcel?.data?.destination || '';
   const isGermany = /deutschland|germany|^de$/i.test(destination);
 
-  // 1. Automatic DHL handover detection for German shipments:
+  // 1. Automatic DHL / Hermes handover detection for German shipments:
   const dhlTrace = parcel?.data?.events?.find((e) =>
     /dhl|deutsche post/i.test(e.description),
   );
@@ -90,6 +90,22 @@ export function carrierTracking(
     : /^0034\d{16}$/.test(number)
       ? number
       : undefined;
+
+  const candidateHermes = parcel
+    ? trackingNumbers(parcel).find((n) => /^H10\d{17}$/i.test(n))
+    : /^H10\d{17}$/i.test(number)
+      ? number
+      : undefined;
+
+  if (candidateHermes) {
+    const encoded = encodeURIComponent(candidateHermes);
+    return {
+      name: 'Hermes',
+      number: candidateHermes,
+      inferred: true,
+      url: `https://www.myhermes.de/empfangen/sendungsverfolgung/sendungsdetails#${encoded}`,
+    };
+  }
 
   if (
     isGermany &&
