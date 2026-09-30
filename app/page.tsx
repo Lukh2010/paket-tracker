@@ -40,9 +40,11 @@ import {
   ShieldAlert,
   ShieldCheck,
   ExternalLink,
+  KeyRound,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Textarea } from '@/components/ui/textarea';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -199,6 +201,8 @@ export default function Home() {
   const [message, setMessage] = useState('');
   const [copiedAi, setCopiedAi] = useState(false);
   const [showVerifyModal, setShowVerifyModal] = useState(false);
+  const [manualCookie, setManualCookie] = useState('');
+  const [isSubmittingCookie, setIsSubmittingCookie] = useState(false);
   const isDesktop = useSyncExternalStore(
     noopSubscribe,
     getIsDesktopSnapshot,
@@ -639,6 +643,45 @@ export default function Home() {
       'noopener,noreferrer,width=960,height=720',
     );
     setShowVerifyModal(false);
+  };
+
+  const handleSaveManualCookie = async () => {
+    if (!manualCookie.trim()) return;
+    setIsSubmittingCookie(true);
+    try {
+      const res = await fetch('/api/cainiao/cookies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cookie: manualCookie.trim() }),
+      });
+      if (res.ok) {
+        toast.create({
+          title: 'Cookies übernommen',
+          description: 'Cainiao-Sitzung aktualisiert. Starte Paketprüfung...',
+          type: 'success',
+        });
+        setShowVerifyModal(false);
+        setManualCookie('');
+        void refresh();
+      } else {
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        toast.create({
+          title: 'Fehler beim Speichern',
+          description: data.error || 'Ungültiges Cookie-Format.',
+          type: 'error',
+        });
+      }
+    } catch {
+      toast.create({
+        title: 'Verbindungsfehler',
+        description: 'Cookie konnte nicht übertragen werden.',
+        type: 'error',
+      });
+    } finally {
+      setIsSubmittingCookie(false);
+    }
   };
 
   const isEditing = Boolean(editingId && selected && editingId === selected.id);
@@ -1432,11 +1475,11 @@ export default function Home() {
       </div>
       {showVerifyModal && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-xs animate-in fade-in">
-          <div className="bg-card text-card-foreground border border-border rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4">
+          <div className="bg-card text-card-foreground border border-border rounded-2xl p-6 max-w-lg w-full shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-start justify-between gap-3">
               <div className="flex items-center gap-3 text-amber-600 dark:text-amber-400">
                 <ShieldAlert size={28} className="shrink-0" />
-                <h3 className="text-lg font-bold">Cainiao-Verifizierung im Browser</h3>
+                <h3 className="text-lg font-bold">Cainiao-Verifizierung / Cookies</h3>
               </div>
               <Button
                 variant="ghost"
@@ -1449,12 +1492,56 @@ export default function Home() {
               </Button>
             </div>
             <p className="text-sm text-muted-foreground leading-relaxed">
-              Cainiao verlangt einen Sicherheits-Schieberegler (Captcha), um aktuelle Tracking-Daten für deine Sendungen bereitzustellen.
+              Cainiao verlangt eine Sicherheitsüberprüfung (Captcha), um aktuelle Tracking-Daten für deine Sendungen bereitzustellen.
             </p>
-            <p className="text-xs text-muted-foreground bg-muted/50 p-3 rounded-lg border border-border/50">
-              💡 Die Tracking-Seite öffnet sich direkt in deinem Browser (Firefox). Löse dort den Schieberegler – sobald die Freigabe erteilt ist, synchronisiert die App deine Sendungen automatisch.
-            </p>
-            <div className="flex items-center justify-between gap-2 pt-2">
+
+            <div className="space-y-3 pt-1">
+              <div className="p-3.5 rounded-xl border border-border/70 bg-muted/40 space-y-2">
+                <div className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+                  <ExternalLink size={14} className="text-amber-600 dark:text-amber-400" />
+                  Weg 1: Direkt im Browser lösen
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Öffnet Cainiao in deinem Standardbrowser. Löse dort den Schieberegler – sobald die Freigabe erteilt ist, synchronisiert die App die Cookies automatisch.
+                </p>
+                <Button
+                  className="bg-amber-600 hover:bg-amber-700 text-white font-medium text-xs gap-1.5 shadow-xs w-full"
+                  size="sm"
+                  onClick={openVerification}
+                >
+                  <ExternalLink size={14} />
+                  Im Standardbrowser öffnen
+                </Button>
+              </div>
+
+              <div className="p-3.5 rounded-xl border border-border/70 bg-muted/40 space-y-2.5">
+                <div className="font-semibold text-xs text-foreground flex items-center gap-1.5">
+                  <KeyRound size={14} className="text-amber-600 dark:text-amber-400" />
+                  Weg 2: Cookie oder cURL manuell einfügen (Schnellste Lösung)
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">
+                  Falls der Schieberegler im Browser streikt (<code className="text-amber-600 dark:text-amber-400 font-mono text-[11px]">error:3vfDv</code>): Im funktionierenden Tab <kbd className="px-1.5 py-0.5 rounded bg-muted border border-border text-[10px] font-mono">F12</kbd> drücken → Konsole → <code className="text-[11px] font-mono bg-muted/80 px-1 py-0.5 rounded border border-border/50">copy(document.cookie)</code> ausführen (oder im Netzwerk-Tab &quot;Als cURL kopieren&quot;) und hier einfügen:
+                </p>
+                <Textarea
+                  placeholder="document.cookie oder cURL-Befehl hier einfügen..."
+                  value={manualCookie}
+                  onChange={(e) => setManualCookie(e.target.value)}
+                  className="text-xs font-mono min-h-20 max-h-36 resize-y bg-background"
+                />
+                <Button
+                  variant="default"
+                  size="sm"
+                  disabled={!manualCookie.trim() || isSubmittingCookie}
+                  onClick={handleSaveManualCookie}
+                  className="w-full text-xs font-medium gap-1.5"
+                >
+                  <Check size={14} />
+                  {isSubmittingCookie ? 'Wird gespeichert...' : 'Cookie übernehmen & aktualisieren'}
+                </Button>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-2 pt-2 border-t border-border/60">
               <Button
                 variant="outline"
                 size="sm"
@@ -1465,23 +1552,13 @@ export default function Home() {
               >
                 Jetzt prüfen
               </Button>
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowVerifyModal(false)}
-                >
-                  Später
-                </Button>
-                <Button
-                  className="bg-amber-600 hover:bg-amber-700 text-white font-medium gap-1.5 shadow-xs"
-                  size="sm"
-                  onClick={openVerification}
-                >
-                  <ExternalLink size={15} />
-                  Im Browser öffnen
-                </Button>
-              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setShowVerifyModal(false)}
+              >
+                Schließen
+              </Button>
             </div>
           </div>
         </div>

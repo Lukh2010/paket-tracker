@@ -14,8 +14,29 @@ export async function POST(request: Request) {
     };
 
     let cookieStr = '';
+    let detectedUa = body.userAgent;
+
     if (typeof body.cookie === 'string' && body.cookie.trim()) {
-      cookieStr = body.cookie.trim();
+      const rawInput = body.cookie.trim();
+      const curlCookieMatch =
+        rawInput.match(/-H\s+['"](?:cookie|Cookie):\s*([^'"]+)['"]/i) ||
+        rawInput.match(/--header\s+['"](?:cookie|Cookie):\s*([^'"]+)['"]/i) ||
+        rawInput.match(/(?:--cookie|-b)\s+['"]([^'"]+)['"]/i);
+
+      const curlUaMatch =
+        rawInput.match(/-H\s+['"](?:user-agent|User-Agent):\s*([^'"]+)['"]/i) ||
+        rawInput.match(/--header\s+['"](?:user-agent|User-Agent):\s*([^'"]+)['"]/i) ||
+        rawInput.match(/(?:--user-agent|-A)\s+['"]([^'"]+)['"]/i);
+
+      if (curlCookieMatch) {
+        cookieStr = curlCookieMatch[1].trim();
+      } else {
+        cookieStr = rawInput;
+      }
+
+      if (curlUaMatch && !detectedUa) {
+        detectedUa = curlUaMatch[1].trim();
+      }
     } else if (Array.isArray(body.cookies)) {
       cookieStr = body.cookies
         .filter(
@@ -33,7 +54,7 @@ export async function POST(request: Request) {
       );
     }
 
-    setCainiaoCookie(cookieStr, body.userAgent);
+    setCainiaoCookie(cookieStr, detectedUa);
 
     try {
       const diskPaths = [

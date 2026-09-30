@@ -339,18 +339,38 @@ function getFirefoxCainiaoCookies() {
       if (!entry.isDirectory()) continue;
       const dbPath = path.join(base, entry.name, 'cookies.sqlite');
       if (!fs.existsSync(dbPath)) continue;
+      const walPath = path.join(base, entry.name, 'cookies.sqlite-wal');
       try {
         const query =
-          "SELECT name, value FROM moz_cookies WHERE host LIKE '%cainiao%' OR host LIKE '%aliexpress%' OR name LIKE '%x5sec%';";
-        const cmd = `sqlite3 "file:${dbPath}?immutable=1" "${query}"`;
-        const out = execSync(cmd, { timeout: 3000 }).toString().trim();
-        if (out) {
-          const lines = out.split('\n');
-          for (const line of lines) {
-            const parts = line.split('|');
-            if (parts.length >= 2) {
-              cookies.set(parts[0], parts[1]);
+          "SELECT name, value FROM moz_cookies WHERE host LIKE '%cainiao%' OR host LIKE '%aliexpress%' OR host LIKE '%alibaba%' OR name LIKE '%x5sec%';";
+        let cmd = '';
+        let cleanupDir = null;
+        if (fs.existsSync(walPath)) {
+          const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'unterwegs-ff-'));
+          cleanupDir = tmpDir;
+          const tmpDb = path.join(tmpDir, 'cookies.sqlite');
+          fs.copyFileSync(dbPath, tmpDb);
+          fs.copyFileSync(walPath, path.join(tmpDir, 'cookies.sqlite-wal'));
+          cmd = `sqlite3 -list -separator '|' "${tmpDb}" "${query}"`;
+        } else {
+          cmd = `sqlite3 -list -separator '|' "file:${dbPath}?immutable=1" "${query}"`;
+        }
+        try {
+          const out = execSync(cmd, { timeout: 3000 }).toString().trim();
+          if (out) {
+            const lines = out.split('\n');
+            for (const line of lines) {
+              const parts = line.split('|');
+              if (parts.length >= 2) {
+                cookies.set(parts[0], parts.slice(1).join('|'));
+              }
             }
+          }
+        } finally {
+          if (cleanupDir) {
+            try {
+              fs.rmSync(cleanupDir, { recursive: true, force: true });
+            } catch {}
           }
         }
       } catch {}
