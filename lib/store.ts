@@ -6,7 +6,12 @@ import {
 } from './shipments';
 import fs from 'node:fs';
 import path from 'node:path';
-import { Parcel, fetchCainiaoTracking, fetchCainiaoBatch } from './tracking';
+import {
+  Parcel,
+  fetchCainiaoTracking,
+  fetchCainiaoBatch,
+  fetchYanwenTracking,
+} from './tracking';
 
 declare const __UNTERWEGS_PARCEL_BOOTSTRAP__: Parcel[];
 
@@ -281,10 +286,33 @@ class ParcelStore {
         for (const p of targets) {
           const freshData = batchResults.get(trackingQueryNumber(p));
           if (freshData) {
+            let finalEvents = freshData.events;
+            const intlNum =
+              freshData.internationalNumber || p.data?.internationalNumber;
+            if (intlNum && (intlNum.startsWith('UL') || intlNum.endsWith('YP'))) {
+              try {
+                const yw = await fetchYanwenTracking(intlNum);
+                if (yw?.events?.length) {
+                  const seen = new Set(
+                    finalEvents.map((e) => e.description.trim().toLowerCase()),
+                  );
+                  const addEvents = yw.events.filter(
+                    (e) => !seen.has(e.description.trim().toLowerCase()),
+                  );
+                  finalEvents = [...finalEvents, ...addEvents].sort(
+                    (a, b) => b.time - a.time,
+                  );
+                }
+              } catch {
+                // Ignore Yanwen upstream fetch failures gracefully
+              }
+            }
+
             this.parcels.set(p.number, {
               ...p,
               data: {
                 ...freshData,
+                events: finalEvents,
                 previousNumbers: [
                   ...new Set([
                     ...trackingNumbers(p),
@@ -292,8 +320,7 @@ class ParcelStore {
                   ]),
                 ],
                 number: p.number,
-                internationalNumber:
-                  freshData.internationalNumber || p.data?.internationalNumber,
+                internationalNumber: intlNum,
               },
               error: undefined,
               lastAttemptAt: attemptedAt,
