@@ -2,6 +2,7 @@ import { groupParcels, carrierTracking } from './shipments';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
+import crypto from 'node:crypto';
 
 export type TrackingEvent = {
   time: number;
@@ -384,7 +385,198 @@ export async function fetchCainiaoBatch(
     }
   }
 
+  // Fallback to official DHL tracking for German 0034 shipments if Cainiao has no trace
+  for (const num of toFetch) {
+    if (num.startsWith('0034')) {
+      const existing = results.get(num);
+      const isDummy =
+        !existing || existing.events.every((e) => e.code === 'ORDER_PROCESSING');
+      if (isDummy) {
+        const dhl = await fetchDhlTracking(num);
+        if (dhl && dhl.events.some((e) => e.code !== 'ORDER_PROCESSING')) {
+          results.set(num, dhl);
+          cainiaoCache.set(num, { at: Date.now(), data: dhl });
+        }
+      }
+    }
+  }
+
   return results;
+}
+
+export async function fetchDhlTracking(
+  piececode: string,
+): Promise<TrackingData | null> {
+  try {
+    const url = `https://www.dhl.de/int-verfolgen/data/search?piececode=${encodeURIComponent(piececode)}&language=de`;
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
+      headers: {
+        'User-Agent': getCainiaoUserAgent(),
+        Accept: 'application/json, text/plain, */*',
+      },
+    });
+    if (!res.ok) return null;
+    const json = (await res.json()) as {
+      sendungen?: Array<{
+        sendungsdetails?: {
+          istZugestellt?: boolean;
+          zielland?: string;
+          sendungsverlauf?: {
+            status?: string;
+            events?: Array<{ datum: string; status: string }>;
+          };
+        };
+      }>;
+    };
+    const sendung = json.sendungen?.[0];
+    if (!sendung?.sendungsdetails?.sendungsverlauf) return null;
+    const sv = sendung.sendungsdetails.sendungsverlauf;
+    const rawEvents = sv.events || [];
+    const events: TrackingEvent[] = rawEvents
+      .map((e) => {
+        const time = new Date(e.datum).getTime();
+        const desc = e.status;
+        let code = 'DELIVERING';
+        if (/zugestellt|abgeholt/i.test(desc)) code = 'GTMS_SIGNED';
+        else if (/zustellung|beladung/i.test(desc)) code = 'GTMS_DO_DEPART';
+        else if (/weitertransport|ankündigt/i.test(desc)) code = 'DELIVERING';
+        return {
+          time: isNaN(time) ? Date.now() : time,
+          description: desc,
+          code,
+        };
+      })
+      .sort((a, b) => b.time - a.time);
+
+    const isDelivered =
+      sendung.sendungsdetails.istZugestellt ||
+      events[0]?.code === 'GTMS_SIGNED';
+
+    return {
+      number: piececode,
+      origin: 'International',
+      destination: sendung.sendungsdetails.zielland || 'Deutschland',
+      status: isDelivered
+        ? 'DELIVERED'
+        : events.length > 0
+          ? 'DELIVERING'
+          : 'ORDER_PROCESSING',
+      carrier: 'DHL',
+      checkedAt: new Date().toISOString(),
+      events:
+        events.length > 0
+          ? events
+          : [
+              {
+                time: Date.now(),
+                description: sv.status || 'Sendung angekündigt',
+                code: 'ORDER_PROCESSING',
+              },
+            ],
+    };
+  } catch {
+    return null;
+  }
+}
+
+function parseYanwenTime(dateStr: string, timeStr: string): number {
+  const m = timeStr.match(/^(\d{2}:\d{2}:\d{2})(?:\s*\[GMT([+-]\d+)\])?$/);
+  if (m) {
+    const timePart = m[1];
+    let offsetPart = m[2] || '+08';
+    if (!offsetPart.startsWith('+') && !offsetPart.startsWith('-')) {
+      offsetPart = `+${offsetPart}`;
+    }
+    const numPart = offsetPart.slice(1).padStart(2, '0');
+    const sign = offsetPart[0];
+    const iso = `${dateStr}T${timePart}${sign}${numPart}:00`;
+    const t = new Date(iso).getTime();
+    if (!isNaN(t)) return t;
+  }
+  return new Date(`${dateStr} ${timeStr}`).getTime() || Date.now();
+}
+
+export async function fetchYanwenTracking(
+  rawNumber: string,
+): Promise<TrackingData | null> {
+  try {
+    const num = rawNumber.trim().toUpperCase().replace(/\s/g, '');
+    const key = '00#78a13&ba6c;73LOL';
+    const cyp = crypto.createHash('md5').update(num + key).digest('hex');
+    const url = `https://track.yw56.com.cn/cn/querydel?nums=${encodeURIComponent(num)}&cyp=${cyp}`;
+
+    const res = await fetch(url, {
+      signal: AbortSignal.timeout(10000),
+      headers: {
+        'User-Agent': getCainiaoUserAgent(),
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'de-DE,de;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+    });
+    if (!res.ok) return null;
+    const html = await res.text();
+
+    const events: TrackingEvent[] = [];
+    const seen = new Set<string>();
+    const dtDdRegex =
+      /<dt>(\d{4}-\d{2}-\d{2})<\/dt>([\s\S]*?)(?=<dt>|<\/dl>)/g;
+    let block: RegExpExecArray | null;
+
+    while ((block = dtDdRegex.exec(html)) !== null) {
+      const dateStr = block[1];
+      const ddContent = block[2];
+      const itemRegex =
+        /<p class="timePoint">([\d:]+(?:\s*\[GMT[+-]\d+\])?)<\/p>[\s\S]*?<div class="cz_r"[^>]*>([\s\S]*?)<\/div>\s*<\/dd>/g;
+      let item: RegExpExecArray | null;
+
+      while ((item = itemRegex.exec(ddContent)) !== null) {
+        const timeStr = item[1];
+        const desc = item[2]
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim();
+        if (!desc) continue;
+
+        const time = parseYanwenTime(dateStr, timeStr);
+        const dedupeKey = `${time}-${desc}`;
+        if (seen.has(dedupeKey)) continue;
+        seen.add(dedupeKey);
+
+        let code = 'DELIVERING';
+        if (/in transit to dhl/i.test(desc)) code = 'DELIVERING';
+        else if (/export|release/i.test(desc)) code = 'CC_EX_SUCCESS';
+        else if (/carrier|port of departure/i.test(desc)) code = 'LH_HO_AIRLINE';
+        else if (/outbound/i.test(desc)) code = 'SC_OUTBOUND_SUCCESS';
+        else if (/pickup/i.test(desc)) code = 'PU_PICKUP_SUCCESS';
+        else if (/information received|instruction/i.test(desc)) {
+          code = 'ORDER_PROCESSING';
+        }
+
+        events.push({
+          time,
+          description: desc,
+          code,
+        });
+      }
+    }
+
+    if (events.length === 0) return null;
+
+    events.sort((a, b) => b.time - a.time);
+
+    return {
+      number: num,
+      origin: 'China',
+      destination: 'Deutschland',
+      status: 'DELIVERING',
+      carrier: 'Yanwen / DHL',
+      checkedAt: new Date().toISOString(),
+      events,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchCainiaoTracking(
@@ -392,9 +584,32 @@ export async function fetchCainiaoTracking(
   bypassCache = false,
 ): Promise<TrackingData> {
   const cleanNumber = rawNumber.trim().toUpperCase().replace(/\s/g, '');
+
+  if (cleanNumber.startsWith('UL') || cleanNumber.endsWith('YP')) {
+    const yw = await fetchYanwenTracking(cleanNumber);
+    if (yw && yw.events.some((e) => e.code !== 'ORDER_PROCESSING')) {
+      return yw;
+    }
+  }
+
+  if (cleanNumber.startsWith('0034')) {
+    const dhl = await fetchDhlTracking(cleanNumber);
+    if (dhl && dhl.events.some((e) => e.code !== 'ORDER_PROCESSING')) {
+      return dhl;
+    }
+  }
+
   const batch = await fetchCainiaoBatch([cleanNumber], bypassCache);
   const data = batch.get(cleanNumber);
   if (!data) {
+    if (cleanNumber.startsWith('0034')) {
+      const dhl = await fetchDhlTracking(cleanNumber);
+      if (dhl) return dhl;
+    }
+    if (cleanNumber.startsWith('UL') || cleanNumber.endsWith('YP')) {
+      const yw = await fetchYanwenTracking(cleanNumber);
+      if (yw) return yw;
+    }
     throw new Error(
       `Noch keine Trackingdaten für ${cleanNumber} verfügbar. Bitte später erneut prüfen.`,
     );
